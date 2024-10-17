@@ -2,8 +2,6 @@ use clap::Parser;
 use lsp_server::ErrorCode;
 use lsp_server::Message;
 use lsp_server::Notification;
-use lsp_server::Request;
-use lsp_server::RequestId;
 use lsp_server::Response;
 use lsp_server::ResponseError;
 use lsp_server::{Connection, IoThreads};
@@ -12,8 +10,8 @@ use lsp_types::notification::Notification as _;
 use lsp_types::notification::ShowMessage;
 use lsp_types::request::Request as _;
 use lsp_types::CompletionItem;
+use lsp_types::CompletionItemKind;
 use lsp_types::CompletionList;
-use lsp_types::ExecuteCommandOptions;
 use lsp_types::InitializeParams;
 use lsp_types::InitializeResult;
 use lsp_types::Location;
@@ -22,16 +20,15 @@ use lsp_types::PositionEncodingKind;
 use lsp_types::Range;
 use lsp_types::ServerCapabilities;
 use lsp_types::ServerInfo;
-use lsp_types::ShowDocumentParams;
-use lsp_types::TextDocumentPositionParams;
 use lsp_types::TextDocumentSyncKind;
 use lsp_types::Url;
 use serde::Deserialize;
 use serde::Serialize;
-use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::fs::read_dir;
+use std::fs::read_to_string;
 use std::path::PathBuf;
+use vcard4::Vcard;
 
 #[derive(Debug, Clone, Parser)]
 struct Args {
@@ -53,7 +50,7 @@ fn server_capabilities() -> ServerCapabilities {
         hover_provider: Some(lsp_types::HoverProviderCapability::Simple(true)),
         definition_provider: Some(lsp_types::OneOf::Left(true)),
         completion_provider: Some(lsp_types::CompletionOptions {
-            resolve_provider: Some(true),
+            // resolve_provider: Some(true),
             ..Default::default()
         }),
         text_document_sync: Some(lsp_types::TextDocumentSyncCapability::Options(
@@ -64,10 +61,10 @@ fn server_capabilities() -> ServerCapabilities {
             },
         )),
         code_action_provider: Some(lsp_types::CodeActionProviderCapability::Simple(true)),
-        execute_command_provider: Some(ExecuteCommandOptions {
-            commands: vec!["define".to_owned()],
-            ..Default::default()
-        }),
+        // execute_command_provider: Some(ExecuteCommandOptions {
+        //     commands: vec!["define".to_owned()],
+        //     ..Default::default()
+        // }),
         ..Default::default()
     }
 }
@@ -192,7 +189,7 @@ impl Server {
             init_opts.vcard_dir
         };
         Self {
-            vcards: VCards::new(&vcard_root),
+            vcards: VCards::new(vcard_root),
             open_files: BTreeMap::new(),
             shutdown: false,
         }
@@ -226,13 +223,12 @@ impl Server {
                                 )
                                 .unwrap();
 
-                            let words = self
-                                .get_words_from_document(&tdp)
-                                .into_iter()
+                            let vcards = self
+                                .get_word_from_document(&tdp)
                                 .map(|w| w.to_lowercase())
-                                .filter(|w| self.vcards.search_emails(w))
-                                .collect::<Vec<_>>();
-                            let response = if let Some(text) = self.vcards.hover(&words) {
+                                .map(|w| self.vcards.find_by_email(&w))
+                                .unwrap_or_default();
+                            let response = if let Some(text) = self.vcards.hover(&vcards) {
                                 let resp = lsp_types::Hover {
                                     contents: lsp_types::HoverContents::Markup(
                                         lsp_types::MarkupContent {
@@ -264,14 +260,21 @@ impl Server {
                                 )
                                 .unwrap();
 
-                            let words = self.get_words_from_document(&tdp);
-                            let words: Vec<_> =
-                                words.into_iter().map(|w| w.to_lowercase()).collect();
-                            let response = match self.vcards.all_info_file(&words) {
-                                Some(filename) => {
+                            let vcard_paths = self
+                                .get_word_from_document(&tdp)
+                                .map(|w| w.to_lowercase())
+                                .map(|w| self.vcards.find_contact_paths_by_email(&w))
+                                .unwrap_or_default();
+                            let response = match vcard_paths.len() {
+                                0 => Message::Response(Response {
+                                    id: r.id,
+                                    result: None,
+                                    error: None,
+                                }),
+                                1 => {
                                     let resp =
                                         lsp_types::GotoDefinitionResponse::Scalar(Location {
-                                            uri: Url::from_file_path(filename).unwrap(),
+                                            uri: Url::from_file_path(vcard_paths[0]).unwrap(),
                                             range: Range::default(),
                                         });
                                     Message::Response(Response {
@@ -280,11 +283,22 @@ impl Server {
                                         error: None,
                                     })
                                 }
-                                None => Message::Response(Response {
-                                    id: r.id,
-                                    result: None,
-                                    error: None,
-                                }),
+                                _ => {
+                                    let resp = lsp_types::GotoDefinitionResponse::Array(
+                                        vcard_paths
+                                            .iter()
+                                            .map(|p| Location {
+                                                uri: Url::from_file_path(p).unwrap(),
+                                                range: Range::default(),
+                                            })
+                                            .collect(),
+                                    );
+                                    Message::Response(Response {
+                                        id: r.id,
+                                        result: serde_json::to_value(resp).ok(),
+                                        error: None,
+                                    })
+                                }
                             };
 
                             c.sender.send(response).unwrap()
@@ -295,15 +309,22 @@ impl Server {
                             >(r.params)
                             .unwrap();
 
-                            tdp.position.character -= 1;
-                            let response = match self.get_words_from_document(&tdp).first() {
+                            tdp.position.character = tdp.position.character.saturating_sub(1);
+                            let response = match self.get_word_from_document(&tdp) {
                                 Some(word) => {
                                     let limit = 100;
                                     let lower_word = word.to_lowercase();
-                                    let completion_items = self.vcards.complete(
-                                        &lower_word,
-                                        word.chars().next().map_or(false, |c| c.is_uppercase()),
-                                        limit,
+                                    let completion_items = self.vcards.complete(&lower_word, limit);
+                                    log(
+                                        &c,
+                                        format!(
+                                            "Completed {:?} {:?} and got {:?}",
+                                            tdp, lower_word, completion_items
+                                        ),
+                                    );
+                                    eprintln!(
+                                        "Completed {:?} {:?} and got {:?}",
+                                        tdp, lower_word, completion_items
                                     );
                                     let resp =
                                         lsp_types::CompletionResponse::List(CompletionList {
@@ -331,7 +352,8 @@ impl Server {
                                     .unwrap();
 
                             let lower_word = ci.label.to_lowercase();
-                            let response = if let Some(doc) = self.vcards.hover(&[lower_word]) {
+                            let vcards = self.vcards.find_by_email(&lower_word);
+                            let response = if let Some(doc) = self.vcards.hover(&vcards) {
                                 ci.documentation = Some(lsp_types::Documentation::MarkupContent(
                                     lsp_types::MarkupContent {
                                         kind: lsp_types::MarkupKind::Markdown,
@@ -354,101 +376,103 @@ impl Server {
                             c.sender.send(response).unwrap()
                         }
                         lsp_types::request::CodeActionRequest::METHOD => {
-                            let cap =
-                                serde_json::from_value::<lsp_types::CodeActionParams>(r.params)
-                                    .unwrap();
-
-                            let tdp = TextDocumentPositionParams {
-                                text_document: cap.text_document,
-                                position: cap.range.start,
-                            };
-
-                            let words = self.get_words_from_document(&tdp);
-                            let completion_items = words
-                                .into_iter()
-                                .map(|w| w.to_lowercase())
-                                .map(|w| {
-                                    let args = serde_json::to_value(DefineCommandArguments {
-                                        word: w.to_owned(),
-                                    })
-                                    .unwrap();
-                                    lsp_types::CodeActionOrCommand::Command(lsp_types::Command {
-                                        title: format!("Define {w:?}"),
-                                        command: "define".to_owned(),
-                                        arguments: Some(vec![args]),
-                                    })
-                                })
-                                .collect::<Vec<_>>();
-                            let response = Message::Response(Response {
-                                id: r.id,
-                                result: Some(serde_json::to_value(completion_items).unwrap()),
-                                error: None,
-                            });
-
-                            c.sender.send(response).unwrap()
+                            todo!()
+                            // let cap =
+                            //     serde_json::from_value::<lsp_types::CodeActionParams>(r.params)
+                            //         .unwrap();
+                            //
+                            // let tdp = TextDocumentPositionParams {
+                            //     text_document: cap.text_document,
+                            //     position: cap.range.start,
+                            // };
+                            //
+                            // let words = self.get_word_from_document(&tdp);
+                            // let completion_items = words
+                            //     .into_iter()
+                            //     .map(|w| w.to_lowercase())
+                            //     .map(|w| {
+                            //         let args = serde_json::to_value(DefineCommandArguments {
+                            //             word: w.to_owned(),
+                            //         })
+                            //         .unwrap();
+                            //         lsp_types::CodeActionOrCommand::Command(lsp_types::Command {
+                            //             title: format!("Define {w:?}"),
+                            //             command: "define".to_owned(),
+                            //             arguments: Some(vec![args]),
+                            //         })
+                            //     })
+                            //     .collect::<Vec<_>>();
+                            // let response = Message::Response(Response {
+                            //     id: r.id,
+                            //     result: Some(serde_json::to_value(completion_items).unwrap()),
+                            //     error: None,
+                            // });
+                            //
+                            // c.sender.send(response).unwrap()
                         }
                         lsp_types::request::ExecuteCommand::METHOD => {
-                            let mut cap =
-                                serde_json::from_value::<lsp_types::ExecuteCommandParams>(r.params)
-                                    .unwrap();
-
-                            let response = match cap.command.as_str() {
-                                "define" => {
-                                    let arg = cap.arguments.swap_remove(0);
-                                    match serde_json::from_value::<DefineCommandArguments>(arg) {
-                                        Ok(args) => match self.vcards.all_info_file(&[args.word]) {
-                                            Some(filename) => {
-                                                let params = ShowDocumentParams {
-                                                    uri: Url::from_file_path(filename).unwrap(),
-                                                    external: None,
-                                                    take_focus: None,
-                                                    selection: None,
-                                                };
-                                                c.sender
-                                                    .send(Message::Request(Request {
-                                                        id: RequestId::from(0),
-                                                        method:
-                                                            lsp_types::request::ShowDocument::METHOD
-                                                                .to_owned(),
-                                                        params: serde_json::to_value(params)
-                                                            .unwrap(),
-                                                    }))
-                                                    .unwrap();
-                                                Message::Response(Response {
-                                                    id: r.id,
-                                                    result: None,
-                                                    error: None,
-                                                })
-                                            }
-                                            None => Message::Response(Response {
-                                                id: r.id,
-                                                result: None,
-                                                error: None,
-                                            }),
-                                        },
-                                        _ => Message::Response(Response {
-                                            id: r.id,
-                                            result: None,
-                                            error: Some(ResponseError {
-                                                code: ErrorCode::InvalidRequest as i32,
-                                                message: String::from("invalid arguments"),
-                                                data: None,
-                                            }),
-                                        }),
-                                    }
-                                }
-                                _ => Message::Response(Response {
-                                    id: r.id,
-                                    result: None,
-                                    error: Some(ResponseError {
-                                        code: ErrorCode::InvalidRequest as i32,
-                                        message: String::from("unknown command"),
-                                        data: None,
-                                    }),
-                                }),
-                            };
-
-                            c.sender.send(response).unwrap()
+                            todo!()
+                            // let mut cap =
+                            //     serde_json::from_value::<lsp_types::ExecuteCommandParams>(r.params)
+                            //         .unwrap();
+                            //
+                            // let response = match cap.command.as_str() {
+                            //     "define" => {
+                            //         let arg = cap.arguments.swap_remove(0);
+                            //         match serde_json::from_value::<DefineCommandArguments>(arg) {
+                            //             Ok(args) => match self.vcards.all_info_file(&[args.word]) {
+                            //                 Some(filename) => {
+                            //                     let params = ShowDocumentParams {
+                            //                         uri: Url::from_file_path(filename).unwrap(),
+                            //                         external: None,
+                            //                         take_focus: None,
+                            //                         selection: None,
+                            //                     };
+                            //                     c.sender
+                            //                         .send(Message::Request(Request {
+                            //                             id: RequestId::from(0),
+                            //                             method:
+                            //                                 lsp_types::request::ShowDocument::METHOD
+                            //                                     .to_owned(),
+                            //                             params: serde_json::to_value(params)
+                            //                                 .unwrap(),
+                            //                         }))
+                            //                         .unwrap();
+                            //                     Message::Response(Response {
+                            //                         id: r.id,
+                            //                         result: None,
+                            //                         error: None,
+                            //                     })
+                            //                 }
+                            //                 None => Message::Response(Response {
+                            //                     id: r.id,
+                            //                     result: None,
+                            //                     error: None,
+                            //                 }),
+                            //             },
+                            //             _ => Message::Response(Response {
+                            //                 id: r.id,
+                            //                 result: None,
+                            //                 error: Some(ResponseError {
+                            //                     code: ErrorCode::InvalidRequest as i32,
+                            //                     message: String::from("invalid arguments"),
+                            //                     data: None,
+                            //                 }),
+                            //             }),
+                            //         }
+                            //     }
+                            //     _ => Message::Response(Response {
+                            //         id: r.id,
+                            //         result: None,
+                            //         error: Some(ResponseError {
+                            //             code: ErrorCode::InvalidRequest as i32,
+                            //             message: String::from("unknown command"),
+                            //             data: None,
+                            //         }),
+                            //     }),
+                            // };
+                            //
+                            // c.sender.send(response).unwrap()
                         }
                         lsp_types::request::Shutdown::METHOD => {
                             self.shutdown = true;
@@ -487,10 +511,12 @@ impl Server {
                             .unwrap();
                             let doc = dctdp.text_document.uri.to_string();
                             let content = self.open_files.get_mut(&doc).unwrap();
+                            eprintln!("Current content for change {:?}", content);
                             for change in dctdp.content_changes {
                                 if let Some(range) = change.range {
                                     let start = resolve_position(content, range.start);
                                     let end = resolve_position(content, range.end);
+                                    eprintln!("Replacing content between {} and {}", start, end);
                                     content.replace_range(start..end, &change.text);
                                 } else {
                                     // full content replace
@@ -537,9 +563,12 @@ impl Server {
         }
     }
 
-    fn get_words_from_document(&self, tdp: &lsp_types::TextDocumentPositionParams) -> Vec<String> {
+    fn get_word_from_document(
+        &self,
+        tdp: &lsp_types::TextDocumentPositionParams,
+    ) -> Option<String> {
         let content = self.get_file_content(&tdp.text_document.uri);
-        get_words_from_content(
+        get_word_from_content(
             &content,
             tdp.position.line as usize,
             tdp.position.character as usize,
@@ -547,53 +576,18 @@ impl Server {
     }
 }
 
-fn get_words_from_content(content: &str, line: usize, character: usize) -> Vec<String> {
-    let line = match content.lines().nth(line) {
-        None => return Vec::new(),
-        Some(l) => l,
-    };
-
-    let mut words = Vec::new();
-    let mut current_word = String::new();
-    if let Some(word) = get_word_from_line(line, character) {
-        for single_word in word.split_whitespace() {
-            if !current_word.is_empty() {
-                current_word.push('_');
-            }
-            current_word.push_str(single_word);
-            words.push(current_word.clone());
-            // now try and simplify the word
-            for c in WORD_PUNC.chars() {
-                if let Some(w) = current_word.strip_prefix(c) {
-                    words.push(w.to_owned());
-                    if let Some(w) = w.strip_suffix(c) {
-                        words.push(w.to_owned());
-                    }
-                }
-                if let Some(w) = current_word.strip_suffix(c) {
-                    words.push(w.to_owned());
-                }
-            }
-        }
-    }
-    // sort by length to try and find the simplest
-    words.sort_unstable_by(|s1, s2| {
-        if s1.len() < s2.len() {
-            Ordering::Less
-        } else {
-            s1.cmp(s2)
-        }
-    });
-    words.dedup();
-    words
+fn get_word_from_content(content: &str, line: usize, character: usize) -> Option<String> {
+    let line = content.lines().nth(line)?;
+    let word = get_word_from_line(line, character)?;
+    Some(word)
 }
 
-const WORD_PUNC: &str = "_-'./";
+const EMAIL_PUNC: &str = "._%+-@";
 
 fn get_word_from_line(line: &str, character: usize) -> Option<String> {
     let mut current_word = String::new();
     let mut found = false;
-    let mut match_chars = WORD_PUNC.to_owned();
+    let mut match_chars = EMAIL_PUNC.to_owned();
     let word_char = |match_with: &str, c: char| c.is_alphanumeric() || match_with.contains(c);
     for (i, c) in line.chars().enumerate() {
         if word_char(&match_chars, c) {
@@ -644,54 +638,140 @@ fn main() {
 
 struct VCards {
     root: PathBuf,
+    vcards: BTreeMap<PathBuf, Vec<vcard4::Vcard>>,
 }
 
 impl VCards {
-    fn new(value: &Path) -> Self {
-        Self {
-            root: value.to_owned(),
+    fn new(value: PathBuf) -> Self {
+        let mut s = Self {
+            root: value,
+            vcards: BTreeMap::new(),
+        };
+        s.load_vcards();
+        s
+    }
+
+    fn load_vcards(&mut self) {
+        let mut vcard_files = Vec::new();
+        for entry in read_dir(&self.root).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_file() && path.extension().unwrap_or_default() == "vcf" {
+                vcard_files.push(path);
+            }
+        }
+
+        self.vcards.clear();
+        for path in vcard_files {
+            let content = read_to_string(&path).unwrap_or_default();
+            match vcard4::parse_loose(content) {
+                Ok(vcards) => self.vcards.entry(path).or_default().extend(vcards),
+                Err(err) => {
+                    // skip card that couldn't be loaded
+                    eprintln!("Failed to load vcard at {:?}: {}", path, err);
+                }
+            }
         }
     }
 
-    fn hover(&self, words: &[String]) -> Option<String> {
-        todo!()
+    fn hover(&self, cards: &[&Vcard]) -> Option<String> {
+        if cards.is_empty() {
+            return None;
+        }
+        Some(
+            cards
+                .iter()
+                .map(|vc| render_vcard(vc))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        )
     }
 
-    fn render_hover(&self, word: &str) -> String {
-        todo!()
+    fn complete(&self, word: &str, limit: usize) -> Vec<CompletionItem> {
+        self.vcards
+            .values()
+            .flatten()
+            .filter(|vc| {
+                vc.email
+                    .iter()
+                    .any(|e| e.value.to_lowercase().contains(word))
+                    || vc
+                        .formatted_name
+                        .iter()
+                        .any(|n| n.value.to_lowercase().contains(word))
+            })
+            .flat_map(|vc| {
+                vc.email.iter().map(|email| CompletionItem {
+                    label: email.value.clone(),
+                    documentation: vc
+                        .formatted_name
+                        .first()
+                        .map(|n| lsp_types::Documentation::String(n.value.clone())),
+                    kind: Some(CompletionItemKind::TEXT),
+                    ..Default::default()
+                })
+            })
+            .take(limit)
+            .collect()
     }
 
-    fn all_info_file(&self, words: &[String]) -> Option<PathBuf> {
-        todo!()
+    fn find_by_email(&self, email: &str) -> Vec<&Vcard> {
+        self.vcards
+            .values()
+            .flatten()
+            .filter(|vc| vc.email.iter().any(|e| e.value.to_lowercase() == email))
+            .collect()
     }
 
-    fn all_info(&self, words: &[String]) -> Option<String> {
-        todo!()
+    fn find_contact_paths_by_email(&self, email: &str) -> Vec<&PathBuf> {
+        self.vcards
+            .iter()
+            .filter(|(_, vcs)| {
+                vcs.iter()
+                    .any(|vc| vc.email.iter().any(|e| e.value.to_lowercase() == email))
+            })
+            .map(|(p, _)| p)
+            .collect()
     }
+}
 
-    fn complete(&self, word: &String, capitalise: bool, limit: usize) -> Vec<CompletionItem> {
-        todo!()
+fn render_vcard(vcard: &Vcard) -> String {
+    let mut lines = Vec::new();
+    if let Some(formatted_name) = vcard.formatted_name.first() {
+        lines.push(format!("# {}", formatted_name.value));
     }
-
-    fn search_emails(&self, email: &String) -> bool{
-        todo!()
+    if let Some(nick) = vcard.nickname.first() {
+        lines.push(format!("_{}_", nick.value));
     }
+    if !vcard.email.is_empty() {
+        lines.push("Email addresses:".to_owned())
+    }
+    for e in vcard.email.iter().map(|e| format!("- {}", e.value)) {
+        lines.push(e)
+    }
+    if !vcard.tel.is_empty() {
+        lines.push("Telephone numbers:".to_owned())
+    }
+    for e in vcard.tel.iter().map(|e| format!("- {}", e)) {
+        lines.push(e)
+    }
+    lines.join("\n")
 }
 
 fn resolve_position(content: &str, pos: Position) -> usize {
-    let count = content
-        .lines()
-        .map(|l| l.len())
-        .take(pos.line as usize)
-        .sum::<usize>();
-    pos.line as usize + count + pos.character as usize
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct DefineCommandArguments {
-    word: String,
-}
-
-#[cfg(test)]
-mod tests {
+    let mut count = 0;
+    let mut lines = 0;
+    let mut character = 0;
+    for c in content.chars() {
+        count += 1;
+        character += 1;
+        if c == '\n' {
+            lines += 1;
+            character = 0;
+        }
+        if lines >= pos.line && character >= pos.character {
+            break;
+        }
+    }
+    count
 }

@@ -7,6 +7,7 @@ A tool to help with writing emails.
 - [ ] `hover` shows a summary of the contact
 - [ ] `gotoDefinition` of an email address to view the vcard
 - [ ] completion for email addresses in address-related headers
+- [ ] diagnostics for addresses not in your contacts
 
 ## Installation
 
@@ -34,6 +35,7 @@ Capabilities are all enabled by default, but can be disabled in the `initializat
 
 ```json
 {
+  "vcard_dir": "~/path/to/contacts",
   "enable_completion": false,
   "enable_hover": false,
   "enable_code_actions": false,
@@ -47,7 +49,7 @@ For debugging and quickly adding it to neovim you can use the provided `vim.lua`
 Just make sure to run `cargo build` and enter `nvim` from the root of this repo.
 
 ```sh
-nvim test.txt
+nvim test.eml
 # then :LspStop
 # then :luafile vim.lua
 # then :LspStart
