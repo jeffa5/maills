@@ -1,0 +1,24 @@
+[package]
+name = "maills"
+version = "0.1.0"
+authors = ["Andrew Jeffery <dev@jeffas.net>"]
+edition = "2021"
+repository = "https://github.com/jeffa5/maills"
+license = "MIT"
+description = "A tool to help with writing emails"
+
+[dependencies]
+lsp-server = "0.7.6"
+lsp-types = "0.95.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.115"
+regex = "1.10.4"
+hex = "0.4.3"
+dirs = "5.0.1"
+memmap = "0.7.0"
+clap = { version = "4.5.4", features = ["derive"] }
+rayon = "1.10.0"
+thiserror = "1.0.58"
+
+[dev-dependencies]
+expect-test = "1.5.0"
