@@ -1,4 +1,5 @@
 use clap::Parser;
+use itertools::Itertools;
 use lsp_server::ErrorCode;
 use lsp_server::Message;
 use lsp_server::Notification;
@@ -50,7 +51,7 @@ fn server_capabilities() -> ServerCapabilities {
         hover_provider: Some(lsp_types::HoverProviderCapability::Simple(true)),
         definition_provider: Some(lsp_types::OneOf::Left(true)),
         completion_provider: Some(lsp_types::CompletionOptions {
-            // resolve_provider: Some(true),
+            resolve_provider: Some(true),
             ..Default::default()
         }),
         text_document_sync: Some(lsp_types::TextDocumentSyncCapability::Options(
@@ -315,17 +316,6 @@ impl Server {
                                     let limit = 100;
                                     let lower_word = word.to_lowercase();
                                     let completion_items = self.vcards.complete(&lower_word, limit);
-                                    log(
-                                        &c,
-                                        format!(
-                                            "Completed {:?} {:?} and got {:?}",
-                                            tdp, lower_word, completion_items
-                                        ),
-                                    );
-                                    eprintln!(
-                                        "Completed {:?} {:?} and got {:?}",
-                                        tdp, lower_word, completion_items
-                                    );
                                     let resp =
                                         lsp_types::CompletionResponse::List(CompletionList {
                                             is_incomplete: completion_items.len() == limit,
@@ -511,12 +501,10 @@ impl Server {
                             .unwrap();
                             let doc = dctdp.text_document.uri.to_string();
                             let content = self.open_files.get_mut(&doc).unwrap();
-                            eprintln!("Current content for change {:?}", content);
                             for change in dctdp.content_changes {
                                 if let Some(range) = change.range {
                                     let start = resolve_position(content, range.start);
                                     let end = resolve_position(content, range.end);
-                                    eprintln!("Replacing content between {} and {}", start, end);
                                     content.replace_range(start..end, &change.text);
                                 } else {
                                     // full content replace
@@ -691,25 +679,15 @@ impl VCards {
         self.vcards
             .values()
             .flatten()
-            .filter(|vc| {
-                vc.email
-                    .iter()
-                    .any(|e| e.value.to_lowercase().contains(word))
-                    || vc
-                        .formatted_name
-                        .iter()
-                        .any(|n| n.value.to_lowercase().contains(word))
-            })
-            .flat_map(|vc| {
-                vc.email.iter().map(|email| CompletionItem {
-                    label: email.value.clone(),
-                    documentation: vc
-                        .formatted_name
-                        .first()
-                        .map(|n| lsp_types::Documentation::String(n.value.clone())),
+            .filter(|vc| match_vcard(vc, word))
+            .flat_map(|vc| vc.email.iter().map(|e| &e.value))
+            .unique()
+            .map(|email| {
+                CompletionItem {
+                    label: email.to_owned(),
                     kind: Some(CompletionItemKind::TEXT),
                     ..Default::default()
-                })
+                }
             })
             .take(limit)
             .collect()
@@ -774,4 +752,16 @@ fn resolve_position(content: &str, pos: Position) -> usize {
         }
     }
     count
+}
+
+fn match_vcard(vc: &Vcard, word: &str) -> bool {
+    let matched_email = vc
+        .email
+        .iter()
+        .any(|e| e.value.to_lowercase().contains(word));
+    let matched_fn = vc
+        .formatted_name
+        .iter()
+        .any(|n| n.value.to_lowercase().contains(word));
+    matched_email || matched_fn
 }
