@@ -682,12 +682,10 @@ impl VCards {
             .filter(|vc| match_vcard(vc, word))
             .flat_map(|vc| vc.email.iter().map(|e| &e.value))
             .unique()
-            .map(|email| {
-                CompletionItem {
-                    label: email.to_owned(),
-                    kind: Some(CompletionItemKind::TEXT),
-                    ..Default::default()
-                }
+            .map(|email| CompletionItem {
+                label: email.to_owned(),
+                kind: Some(CompletionItemKind::TEXT),
+                ..Default::default()
             })
             .take(limit)
             .collect()
@@ -763,5 +761,9 @@ fn match_vcard(vc: &Vcard, word: &str) -> bool {
         .formatted_name
         .iter()
         .any(|n| n.value.to_lowercase().contains(word));
-    matched_email || matched_fn
+    let matched_nick = vc
+        .nickname
+        .iter()
+        .any(|n| n.value.to_lowercase().contains(word));
+    matched_email || matched_fn || matched_nick
 }
