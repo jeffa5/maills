@@ -8,6 +8,7 @@ A tool to help with writing emails.
 - [x] `gotoDefinition` of an email address to view the vcard
 - [x] completion for email addresses, and contact names
 - [ ] diagnostics for addresses not in your contacts
+- [ ] code action to add addresses to contacts
 
 ## Installation
 
