@@ -26,9 +26,11 @@ use lsp_types::Url;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::fmt::Display;
 use std::fs::read_dir;
 use std::fs::read_to_string;
 use std::path::PathBuf;
+use std::str::FromStr;
 use vcard4::Vcard;
 
 #[derive(Debug, Clone, Parser)]
@@ -341,8 +343,8 @@ impl Server {
                                 serde_json::from_value::<lsp_types::CompletionItem>(r.params)
                                     .unwrap();
 
-                            let lower_word = ci.label.to_lowercase();
-                            let vcards = self.vcards.find_by_email(&lower_word);
+                            let mailbox = Mailbox::from_str(&ci.label).unwrap();
+                            let vcards = self.vcards.find_by_mailbox(&mailbox);
                             let response = if let Some(doc) = self.vcards.hover(&vcards) {
                                 ci.documentation = Some(lsp_types::Documentation::MarkupContent(
                                     lsp_types::MarkupContent {
@@ -680,7 +682,7 @@ impl VCards {
             .values()
             .flatten()
             .filter(|vc| match_vcard(vc, word))
-            .flat_map(|vc| vc.email.iter().map(|e| &e.value))
+            .flat_map(mailboxes_for_vcard)
             .unique()
             .map(|email| CompletionItem {
                 label: email.to_owned(),
@@ -696,6 +698,21 @@ impl VCards {
             .values()
             .flatten()
             .filter(|vc| vc.email.iter().any(|e| e.value.to_lowercase() == email))
+            .collect()
+    }
+
+    fn find_by_mailbox(&self, mailbox: &Mailbox) -> Vec<&Vcard> {
+        self.vcards
+            .values()
+            .flatten()
+            .filter(|vc| {
+                vc.email
+                    .iter()
+                    .any(|e| e.value.to_lowercase() == mailbox.email)
+                    && mailbox.name.as_ref().map_or(true, |name| {
+                        vc.formatted_name.iter().any(|f| &f.value == name)
+                    })
+            })
             .collect()
     }
 
@@ -715,21 +732,25 @@ fn render_vcard(vcard: &Vcard) -> String {
     let mut lines = Vec::new();
     if let Some(formatted_name) = vcard.formatted_name.first() {
         lines.push(format!("# {}", formatted_name.value));
+        lines.push(String::new());
     }
     if let Some(nick) = vcard.nickname.first() {
         lines.push(format!("_{}_", nick.value));
+        lines.push(String::new());
     }
     if !vcard.email.is_empty() {
-        lines.push("Email addresses:".to_owned())
-    }
-    for e in vcard.email.iter().map(|e| format!("- {}", e.value)) {
-        lines.push(e)
+        lines.push("Email addresses:".to_owned());
+        for e in vcard.email.iter().map(|e| format!("- {}", e.value)) {
+            lines.push(e)
+        }
+        lines.push(String::new());
     }
     if !vcard.tel.is_empty() {
-        lines.push("Telephone numbers:".to_owned())
-    }
-    for e in vcard.tel.iter().map(|e| format!("- {}", e)) {
-        lines.push(e)
+        lines.push("Telephone numbers:".to_owned());
+        for e in vcard.tel.iter().map(|e| format!("- {}", e)) {
+            lines.push(e)
+        }
+        lines.push(String::new());
     }
     lines.join("\n")
 }
@@ -766,4 +787,57 @@ fn match_vcard(vc: &Vcard, word: &str) -> bool {
         .iter()
         .any(|n| n.value.to_lowercase().contains(word));
     matched_email || matched_fn || matched_nick
+}
+
+fn mailboxes_for_vcard(vcard: &Vcard) -> Vec<String> {
+    let formatted_name = vcard.formatted_name.first().map(|n| &n.value);
+    vcard
+        .email
+        .iter()
+        .map(|e| {
+            if let Some(n) = &formatted_name {
+                format!("{:?} <{}>", n, e.value)
+            } else {
+                e.value.clone()
+            }
+        })
+        .collect()
+}
+
+struct Mailbox {
+    name: Option<String>,
+    email: String,
+}
+
+impl FromStr for Mailbox {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some((name, email)) = s.split_once("\" <") {
+            let name = name.trim_start_matches('"').to_owned();
+            let email = email.trim_end_matches('>').to_owned();
+            Ok(Self {
+                name: Some(name),
+                email,
+            })
+        } else {
+            Ok(Self {
+                name: None,
+                email: s.to_owned(),
+            })
+        }
+    }
+}
+
+impl Display for Mailbox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(name) = &self.name {
+            write!(f, "{:?} <", name)?;
+        }
+        write!(f, "{}", self.email)?;
+        if self.name.is_some() {
+            write!(f, ">")?;
+        }
+        Ok(())
+    }
 }
