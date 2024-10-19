@@ -4,9 +4,9 @@ A tool to help with writing emails.
 
 ## Actions
 
-- [ ] `hover` shows a summary of the contact
-- [ ] `gotoDefinition` of an email address to view the vcard
-- [ ] completion for email addresses in address-related headers
+- [x] `hover` shows a summary of the contact
+- [x] `gotoDefinition` of an email address to view the vcard
+- [x] completion for email addresses, and contact names
 - [ ] diagnostics for addresses not in your contacts
 
 ## Installation
