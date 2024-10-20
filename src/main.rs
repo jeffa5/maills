@@ -164,6 +164,7 @@ fn connect(stdio: bool) -> (lsp_types::InitializeParams, Connection, IoThreads) 
 struct Server {
     vcards: VCards,
     open_files: BTreeMap<String, String>,
+    diagnostics: Vec<Diagnostic>,
     shutdown: bool,
 }
 
@@ -211,6 +212,7 @@ impl Server {
         Self {
             vcards: VCards::new(vcard_root),
             open_files: BTreeMap::new(),
+            diagnostics: Vec::new(),
             shutdown: false,
         }
     }
@@ -399,12 +401,21 @@ impl Server {
                                 let args =
                                     serde_json::to_value(CreateContactCommandArguments { email })
                                         .unwrap();
+                                let fixed_diagnostics = self
+                                    .diagnostics
+                                    .iter()
+                                    .filter(|d| in_range(&d.range, &cap.range.start))
+                                    .cloned()
+                                    .collect::<Vec<_>>();
                                 let action = lsp_types::CodeActionOrCommand::CodeAction(
                                     lsp_types::CodeAction {
                                         title: "Add to contacts".to_owned(),
                                         kind: Some(CodeActionKind::QUICKFIX),
-                                        // TODO: this should resolve the hint for this item
-                                        diagnostics: None,
+                                        diagnostics: if fixed_diagnostics.is_empty() {
+                                            None
+                                        } else {
+                                            Some(fixed_diagnostics)
+                                        },
                                         command: Some(lsp_types::Command {
                                             title: "Add to contacts".to_owned(),
                                             command: CREATE_CONTACT_COMMAND.to_owned(),
@@ -605,7 +616,7 @@ impl Server {
         )
     }
 
-    fn refresh_diagnostics(&self, file: &str) -> Vec<Diagnostic> {
+    fn refresh_diagnostics(&mut self, file: &str) -> Vec<Diagnostic> {
         let content = self.open_files.get(file).unwrap();
         // from https://www.regular-expressions.info/email.html
         let re = regex::Regex::new(r"(?mi)\b([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b").unwrap();
@@ -616,7 +627,7 @@ impl Server {
             let email = mtch.as_str();
             email_locations.push((email, start, end));
         }
-        email_locations
+        let diagnostics = email_locations
             .iter()
             .filter(|(e, _, _)| self.vcards.find_by_email(e).is_empty())
             .map(|(_, start, end)| {
@@ -634,7 +645,9 @@ impl Server {
                     ..Default::default()
                 }
             })
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        self.diagnostics = diagnostics.clone();
+        diagnostics
     }
 }
 
@@ -933,4 +946,11 @@ impl Display for Mailbox {
 #[derive(Debug, Serialize, Deserialize)]
 struct CreateContactCommandArguments {
     email: String,
+}
+
+fn in_range(range: &Range, position: &Position) -> bool {
+    (range.start.line < position.line
+        || (range.start.line == position.line && range.start.character <= position.character))
+        && (range.end.line > position.line
+            || (range.end.line == position.line && range.end.character > position.character))
 }
