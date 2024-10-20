@@ -45,6 +45,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
 use uriparse::URI;
+use vcard4::property::Property;
 use vcard4::Vcard;
 use vcard4::VcardBuilder;
 
@@ -869,16 +870,34 @@ fn render_vcard(vcard: &Vcard) -> String {
         lines.push(String::new());
     }
     if !vcard.email.is_empty() {
-        lines.push("Email addresses:".to_owned());
-        for e in vcard.email.iter().map(|e| format!("- {}", e.value)) {
-            lines.push(e)
+        lines.push("Email:".to_owned());
+        for e in vcard.email.iter() {
+            let mut line = "- ".to_owned();
+            if let Some(typ) = &e
+                .parameters()
+                .and_then(|p| p.types.as_ref().and_then(|types| types.first()))
+            {
+                line.push_str(&typ.to_string());
+                line.push_str(": ");
+            }
+            line.push_str(&e.value);
+            lines.push(line);
         }
         lines.push(String::new());
     }
     if !vcard.tel.is_empty() {
-        lines.push("Telephone numbers:".to_owned());
-        for e in vcard.tel.iter().map(|e| format!("- {}", e)) {
-            lines.push(e)
+        lines.push("Telephone:".to_owned());
+        for e in vcard.tel.iter() {
+            let mut line = "- ".to_owned();
+            if let Some(typ) = &e
+                .parameters()
+                .and_then(|p| p.types.as_ref().and_then(|types| types.first()))
+            {
+                line.push_str(&typ.to_string());
+                line.push_str(": ");
+            }
+            line.push_str(&e.to_string());
+            lines.push(line);
         }
         lines.push(String::new());
     }
@@ -933,7 +952,6 @@ fn mailboxes_for_vcard(vcard: &Vcard) -> Vec<String> {
         })
         .collect()
 }
-
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CreateContactCommandArguments {
