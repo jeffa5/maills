@@ -22,6 +22,8 @@ thiserror = "1.0.58"
 vcard4 = "0.5.2"
 itertools = "0.13.0"
 line-index = "0.1.2"
+uuid = { version = "1.11.0", features = ["v4"] }
+uriparse = "0.6.4"
 
 [dev-dependencies]
 expect-test = "1.5.0"

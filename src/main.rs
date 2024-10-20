@@ -5,6 +5,7 @@ use line_index::TextSize;
 use lsp_server::ErrorCode;
 use lsp_server::Message;
 use lsp_server::Notification;
+use lsp_server::RequestId;
 use lsp_server::Response;
 use lsp_server::ResponseError;
 use lsp_server::{Connection, IoThreads};
@@ -13,11 +14,13 @@ use lsp_types::notification::Notification as _;
 use lsp_types::notification::PublishDiagnostics;
 use lsp_types::notification::ShowMessage;
 use lsp_types::request::Request as _;
+use lsp_types::CodeActionKind;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionList;
 use lsp_types::Diagnostic;
 use lsp_types::DiagnosticSeverity;
+use lsp_types::ExecuteCommandOptions;
 use lsp_types::InitializeParams;
 use lsp_types::InitializeResult;
 use lsp_types::Location;
@@ -27,6 +30,8 @@ use lsp_types::PublishDiagnosticsParams;
 use lsp_types::Range;
 use lsp_types::ServerCapabilities;
 use lsp_types::ServerInfo;
+use lsp_types::ShowDocumentParams;
+use lsp_types::TextDocumentPositionParams;
 use lsp_types::TextDocumentSyncKind;
 use lsp_types::Url;
 use serde::Deserialize;
@@ -35,9 +40,15 @@ use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::fs::read_dir;
 use std::fs::read_to_string;
+use std::fs::File;
+use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
+use uriparse::URI;
 use vcard4::Vcard;
+use vcard4::VcardBuilder;
+
+const CREATE_CONTACT_COMMAND: &str = "create_contact";
 
 #[derive(Debug, Clone, Parser)]
 struct Args {
@@ -69,11 +80,11 @@ fn server_capabilities() -> ServerCapabilities {
                 ..Default::default()
             },
         )),
-        // code_action_provider: Some(lsp_types::CodeActionProviderCapability::Simple(true)),
-        // execute_command_provider: Some(ExecuteCommandOptions {
-        //     commands: vec!["define".to_owned()],
-        //     ..Default::default()
-        // }),
+        code_action_provider: Some(lsp_types::CodeActionProviderCapability::Simple(true)),
+        execute_command_provider: Some(ExecuteCommandOptions {
+            commands: vec![CREATE_CONTACT_COMMAND.to_owned()],
+            ..Default::default()
+        }),
         ..Default::default()
     }
 }
@@ -374,103 +385,102 @@ impl Server {
                             c.sender.send(response).unwrap()
                         }
                         lsp_types::request::CodeActionRequest::METHOD => {
-                            todo!()
-                            // let cap =
-                            //     serde_json::from_value::<lsp_types::CodeActionParams>(r.params)
-                            //         .unwrap();
-                            //
-                            // let tdp = TextDocumentPositionParams {
-                            //     text_document: cap.text_document,
-                            //     position: cap.range.start,
-                            // };
-                            //
-                            // let words = self.get_word_from_document(&tdp);
-                            // let completion_items = words
-                            //     .into_iter()
-                            //     .map(|w| w.to_lowercase())
-                            //     .map(|w| {
-                            //         let args = serde_json::to_value(DefineCommandArguments {
-                            //             word: w.to_owned(),
-                            //         })
-                            //         .unwrap();
-                            //         lsp_types::CodeActionOrCommand::Command(lsp_types::Command {
-                            //             title: format!("Define {w:?}"),
-                            //             command: "define".to_owned(),
-                            //             arguments: Some(vec![args]),
-                            //         })
-                            //     })
-                            //     .collect::<Vec<_>>();
-                            // let response = Message::Response(Response {
-                            //     id: r.id,
-                            //     result: Some(serde_json::to_value(completion_items).unwrap()),
-                            //     error: None,
-                            // });
-                            //
-                            // c.sender.send(response).unwrap()
+                            let cap =
+                                serde_json::from_value::<lsp_types::CodeActionParams>(r.params)
+                                    .unwrap();
+
+                            let tdp = TextDocumentPositionParams {
+                                text_document: cap.text_document,
+                                position: cap.range.start,
+                            };
+
+                            let mut action_list = Vec::new();
+                            if let Some(email) = self.get_word_from_document(&tdp) {
+                                let args =
+                                    serde_json::to_value(CreateContactCommandArguments { email })
+                                        .unwrap();
+                                let action = lsp_types::CodeActionOrCommand::CodeAction(
+                                    lsp_types::CodeAction {
+                                        title: "Add to contacts".to_owned(),
+                                        kind: Some(CodeActionKind::QUICKFIX),
+                                        // TODO: this should resolve the hint for this item
+                                        diagnostics: None,
+                                        command: Some(lsp_types::Command {
+                                            title: "Add to contacts".to_owned(),
+                                            command: CREATE_CONTACT_COMMAND.to_owned(),
+                                            arguments: Some(vec![args]),
+                                        }),
+                                        ..Default::default()
+                                    },
+                                );
+                                action_list.push(action);
+                            }
+                            let response = Message::Response(Response {
+                                id: r.id,
+                                result: Some(serde_json::to_value(action_list).unwrap()),
+                                error: None,
+                            });
+
+                            c.sender.send(response).unwrap()
                         }
                         lsp_types::request::ExecuteCommand::METHOD => {
-                            todo!()
-                            // let mut cap =
-                            //     serde_json::from_value::<lsp_types::ExecuteCommandParams>(r.params)
-                            //         .unwrap();
-                            //
-                            // let response = match cap.command.as_str() {
-                            //     "define" => {
-                            //         let arg = cap.arguments.swap_remove(0);
-                            //         match serde_json::from_value::<DefineCommandArguments>(arg) {
-                            //             Ok(args) => match self.vcards.all_info_file(&[args.word]) {
-                            //                 Some(filename) => {
-                            //                     let params = ShowDocumentParams {
-                            //                         uri: Url::from_file_path(filename).unwrap(),
-                            //                         external: None,
-                            //                         take_focus: None,
-                            //                         selection: None,
-                            //                     };
-                            //                     c.sender
-                            //                         .send(Message::Request(Request {
-                            //                             id: RequestId::from(0),
-                            //                             method:
-                            //                                 lsp_types::request::ShowDocument::METHOD
-                            //                                     .to_owned(),
-                            //                             params: serde_json::to_value(params)
-                            //                                 .unwrap(),
-                            //                         }))
-                            //                         .unwrap();
-                            //                     Message::Response(Response {
-                            //                         id: r.id,
-                            //                         result: None,
-                            //                         error: None,
-                            //                     })
-                            //                 }
-                            //                 None => Message::Response(Response {
-                            //                     id: r.id,
-                            //                     result: None,
-                            //                     error: None,
-                            //                 }),
-                            //             },
-                            //             _ => Message::Response(Response {
-                            //                 id: r.id,
-                            //                 result: None,
-                            //                 error: Some(ResponseError {
-                            //                     code: ErrorCode::InvalidRequest as i32,
-                            //                     message: String::from("invalid arguments"),
-                            //                     data: None,
-                            //                 }),
-                            //             }),
-                            //         }
-                            //     }
-                            //     _ => Message::Response(Response {
-                            //         id: r.id,
-                            //         result: None,
-                            //         error: Some(ResponseError {
-                            //             code: ErrorCode::InvalidRequest as i32,
-                            //             message: String::from("unknown command"),
-                            //             data: None,
-                            //         }),
-                            //     }),
-                            // };
-                            //
-                            // c.sender.send(response).unwrap()
+                            let mut cap =
+                                serde_json::from_value::<lsp_types::ExecuteCommandParams>(r.params)
+                                    .unwrap();
+
+                            let response = match cap.command.as_str() {
+                                CREATE_CONTACT_COMMAND => {
+                                    let arg = cap.arguments.swap_remove(0);
+                                    match serde_json::from_value::<CreateContactCommandArguments>(
+                                        arg,
+                                    ) {
+                                        Ok(args) => {
+                                            let path = self.vcards.create_contact(args.email);
+
+                                            let params = ShowDocumentParams {
+                                                uri: Url::from_file_path(path).unwrap(),
+                                                external: None,
+                                                take_focus: None,
+                                                selection: None,
+                                            };
+                                            c.sender
+                                                .send(Message::Request(lsp_server::Request {
+                                                    id: RequestId::from(0),
+                                                    method:
+                                                        lsp_types::request::ShowDocument::METHOD
+                                                            .to_owned(),
+                                                    params: serde_json::to_value(params).unwrap(),
+                                                }))
+                                                .unwrap();
+                                            Message::Response(Response {
+                                                id: r.id,
+                                                result: None,
+                                                error: None,
+                                            })
+                                        }
+                                        _ => Message::Response(Response {
+                                            id: r.id,
+                                            result: None,
+                                            error: Some(ResponseError {
+                                                code: ErrorCode::InvalidRequest as i32,
+                                                message: String::from("invalid arguments"),
+                                                data: None,
+                                            }),
+                                        }),
+                                    }
+                                }
+                                _ => Message::Response(Response {
+                                    id: r.id,
+                                    result: None,
+                                    error: Some(ResponseError {
+                                        code: ErrorCode::InvalidRequest as i32,
+                                        message: String::from("unknown command"),
+                                        data: None,
+                                    }),
+                                }),
+                            };
+
+                            c.sender.send(response).unwrap()
                         }
                         lsp_types::request::Shutdown::METHOD => {
                             self.shutdown = true;
@@ -614,12 +624,16 @@ impl Server {
                 let start = li.line_col(TextSize::new(*start as u32));
                 let end = li.line_col(TextSize::new(*end as u32));
                 Diagnostic {
-                range: Range::new(Position::new(start.line, start.col), Position::new(end.line, end.col)),
-                severity: Some(DiagnosticSeverity::HINT),
-                // source: todo!(),
-                message: "Address is not in contacts".to_owned(),
-                ..Default::default()
-            }})
+                    range: Range::new(
+                        Position::new(start.line, start.col),
+                        Position::new(end.line, end.col),
+                    ),
+                    severity: Some(DiagnosticSeverity::HINT),
+                    // source: todo!(),
+                    message: "Address is not in contacts".to_owned(),
+                    ..Default::default()
+                }
+            })
             .collect::<Vec<_>>()
     }
 }
@@ -784,6 +798,22 @@ impl VCards {
             .map(|(p, _)| p)
             .collect()
     }
+
+    fn create_contact(&mut self, email: String) -> PathBuf {
+        let filename = uuid::Uuid::new_v4().to_string();
+        let path = self.root.join(&filename).with_extension("vcf");
+        let vcard = VcardBuilder::new("".to_owned())
+            .uid(
+                URI::try_from(format!("urn:uuid:{}", filename).as_str())
+                    .unwrap()
+                    .into_owned(),
+            )
+            .email(email)
+            .finish();
+        let mut f = File::create(&path).unwrap();
+        f.write_all(vcard.to_string().as_bytes()).unwrap();
+        path
+    }
 }
 
 fn render_vcard(vcard: &Vcard) -> String {
@@ -898,4 +928,9 @@ impl Display for Mailbox {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CreateContactCommandArguments {
+    email: String,
 }
