@@ -1,5 +1,7 @@
 use clap::Parser;
 use itertools::Itertools;
+use line_index::LineIndex;
+use line_index::TextSize;
 use lsp_server::ErrorCode;
 use lsp_server::Message;
 use lsp_server::Notification;
@@ -8,16 +10,20 @@ use lsp_server::ResponseError;
 use lsp_server::{Connection, IoThreads};
 use lsp_types::notification::LogMessage;
 use lsp_types::notification::Notification as _;
+use lsp_types::notification::PublishDiagnostics;
 use lsp_types::notification::ShowMessage;
 use lsp_types::request::Request as _;
 use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionList;
+use lsp_types::Diagnostic;
+use lsp_types::DiagnosticSeverity;
 use lsp_types::InitializeParams;
 use lsp_types::InitializeResult;
 use lsp_types::Location;
 use lsp_types::Position;
 use lsp_types::PositionEncodingKind;
+use lsp_types::PublishDiagnosticsParams;
 use lsp_types::Range;
 use lsp_types::ServerCapabilities;
 use lsp_types::ServerInfo;
@@ -488,6 +494,18 @@ impl Server {
                                 dotdp.text_document.uri.to_string(),
                                 dotdp.text_document.text,
                             );
+                            let diagnostics =
+                                self.refresh_diagnostics(dotdp.text_document.uri.as_ref());
+                            c.sender
+                                .send(Message::Notification(Notification::new(
+                                    PublishDiagnostics::METHOD.to_owned(),
+                                    PublishDiagnosticsParams {
+                                        uri: dotdp.text_document.uri,
+                                        diagnostics,
+                                        version: Some(dotdp.text_document.version),
+                                    },
+                                )))
+                                .unwrap();
                             // log(
                             //     &c,
                             //     format!(
@@ -513,6 +531,18 @@ impl Server {
                                     *content = change.text;
                                 }
                             }
+                            let diagnostics =
+                                self.refresh_diagnostics(dctdp.text_document.uri.as_ref());
+                            c.sender
+                                .send(Message::Notification(Notification::new(
+                                    PublishDiagnostics::METHOD.to_owned(),
+                                    PublishDiagnosticsParams {
+                                        uri: dctdp.text_document.uri,
+                                        diagnostics,
+                                        version: Some(dctdp.text_document.version),
+                                    },
+                                )))
+                                .unwrap();
                             // log(&c, format!("got change document notification for {doc:?}"))
                         }
                         lsp_types::notification::DidCloseTextDocument::METHOD => {
@@ -563,6 +593,34 @@ impl Server {
             tdp.position.line as usize,
             tdp.position.character as usize,
         )
+    }
+
+    fn refresh_diagnostics(&self, file: &str) -> Vec<Diagnostic> {
+        let content = self.open_files.get(file).unwrap();
+        // from https://www.regular-expressions.info/email.html
+        let re = regex::Regex::new(r"(?mi)\b([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b").unwrap();
+        let mut email_locations = Vec::new();
+        for mtch in re.find_iter(content) {
+            let start = mtch.start();
+            let end = mtch.end();
+            let email = mtch.as_str();
+            email_locations.push((email, start, end));
+        }
+        email_locations
+            .iter()
+            .filter(|(e, _, _)| self.vcards.find_by_email(e).is_empty())
+            .map(|(_, start, end)| {
+                let li = LineIndex::new(content);
+                let start = li.line_col(TextSize::new(*start as u32));
+                let end = li.line_col(TextSize::new(*end as u32));
+                Diagnostic {
+                range: Range::new(Position::new(start.line, start.col), Position::new(end.line, end.col)),
+                severity: Some(DiagnosticSeverity::HINT),
+                // source: todo!(),
+                message: "Address is not in contacts".to_owned(),
+                ..Default::default()
+            }})
+            .collect::<Vec<_>>()
     }
 }
 

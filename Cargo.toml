@@ -21,6 +21,7 @@ rayon = "1.10.0"
 thiserror = "1.0.58"
 vcard4 = "0.5.2"
 itertools = "0.13.0"
+line-index = "0.1.2"
 
 [dev-dependencies]
 expect-test = "1.5.0"
