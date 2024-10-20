@@ -246,9 +246,8 @@ impl Server {
                                 .unwrap();
 
                             let vcards = self
-                                .get_word_from_document(&tdp)
-                                .map(|w| w.to_lowercase())
-                                .map(|w| self.vcards.find_by_email(&w))
+                                .get_mailbox_from_document(&tdp)
+                                .map(|mailbox| self.vcards.get_by_mailbox(&mailbox))
                                 .unwrap_or_default();
                             let response = if let Some(text) = self.vcards.hover(&vcards) {
                                 let resp = lsp_types::Hover {
@@ -283,9 +282,8 @@ impl Server {
                                 .unwrap();
 
                             let vcard_paths = self
-                                .get_word_from_document(&tdp)
-                                .map(|w| w.to_lowercase())
-                                .map(|w| self.vcards.find_contact_paths_by_email(&w))
+                                .get_mailbox_from_document(&tdp)
+                                .map(|mailbox| self.vcards.find_contact_paths_by_mailbox(&mailbox))
                                 .unwrap_or_default();
                             let response = match vcard_paths.len() {
                                 0 => Message::Response(Response {
@@ -363,7 +361,7 @@ impl Server {
                                     .unwrap();
 
                             let mailbox = Mailbox::from_str(&ci.label).unwrap();
-                            let vcards = self.vcards.find_by_mailbox(&mailbox);
+                            let vcards = self.vcards.get_by_mailbox(&mailbox);
                             let response = if let Some(doc) = self.vcards.hover(&vcards) {
                                 ci.documentation = Some(lsp_types::Documentation::MarkupContent(
                                     lsp_types::MarkupContent {
@@ -397,9 +395,9 @@ impl Server {
                             };
 
                             let mut action_list = Vec::new();
-                            if let Some(email) = self.get_word_from_document(&tdp) {
+                            if let Some(mailbox) = self.get_mailbox_from_document(&tdp) {
                                 let args =
-                                    serde_json::to_value(CreateContactCommandArguments { email })
+                                    serde_json::to_value(CreateContactCommandArguments { mailbox })
                                         .unwrap();
                                 let fixed_diagnostics = self
                                     .diagnostics
@@ -446,7 +444,7 @@ impl Server {
                                         arg,
                                     ) {
                                         Ok(args) => {
-                                            let path = self.vcards.create_contact(args.email);
+                                            let path = self.vcards.create_contact(args.mailbox);
 
                                             let params = ShowDocumentParams {
                                                 uri: Url::from_file_path(path).unwrap(),
@@ -604,6 +602,18 @@ impl Server {
         }
     }
 
+    fn get_mailbox_from_document(
+        &self,
+        tdp: &lsp_types::TextDocumentPositionParams,
+    ) -> Option<Mailbox> {
+        let content = self.get_file_content(&tdp.text_document.uri);
+        get_mailbox_from_content(
+            &content,
+            tdp.position.line as usize,
+            tdp.position.character as usize,
+        )
+    }
+
     fn get_word_from_document(
         &self,
         tdp: &lsp_types::TextDocumentPositionParams,
@@ -629,7 +639,7 @@ impl Server {
         }
         let diagnostics = email_locations
             .iter()
-            .filter(|(e, _, _)| self.vcards.find_by_email(e).is_empty())
+            .filter(|(e, _, _)| self.vcards.search_by_email(e).is_empty())
             .map(|(_, start, end)| {
                 let li = LineIndex::new(content);
                 let start = li.line_col(TextSize::new(*start as u32));
@@ -649,6 +659,11 @@ impl Server {
         self.diagnostics = diagnostics.clone();
         diagnostics
     }
+}
+
+fn get_mailbox_from_content(content: &str, line: usize, character: usize) -> Option<Mailbox> {
+    let line = content.lines().nth(line)?;
+    Mailbox::from_line_at(line, character)
 }
 
 fn get_word_from_content(content: &str, line: usize, character: usize) -> Option<String> {
@@ -778,50 +793,64 @@ impl VCards {
             .collect()
     }
 
-    fn find_by_email(&self, email: &str) -> Vec<&Vcard> {
-        self.vcards
-            .values()
-            .flatten()
-            .filter(|vc| vc.email.iter().any(|e| e.value.to_lowercase() == email))
-            .collect()
-    }
-
-    fn find_by_mailbox(&self, mailbox: &Mailbox) -> Vec<&Vcard> {
+    fn search_by_email(&self, email: &str) -> Vec<&Vcard> {
         self.vcards
             .values()
             .flatten()
             .filter(|vc| {
                 vc.email
                     .iter()
-                    .any(|e| e.value.to_lowercase() == mailbox.email)
+                    .any(|e| e.value.to_lowercase() == email.to_lowercase())
+            })
+            .collect()
+    }
+
+    fn get_by_mailbox(&self, mailbox: &Mailbox) -> Vec<&Vcard> {
+        self.vcards
+            .values()
+            .flatten()
+            .filter(|vc| {
+                vc.email
+                    .iter()
+                    .any(|e| e.value.to_lowercase() == mailbox.email.to_lowercase())
                     && mailbox.name.as_ref().map_or(true, |name| {
-                        vc.formatted_name.iter().any(|f| &f.value == name)
+                        vc.formatted_name
+                            .iter()
+                            .any(|f| f.value.to_lowercase() == name.to_lowercase())
                     })
             })
             .collect()
     }
 
-    fn find_contact_paths_by_email(&self, email: &str) -> Vec<&PathBuf> {
+    fn find_contact_paths_by_mailbox(&self, mailbox: &Mailbox) -> Vec<&PathBuf> {
         self.vcards
             .iter()
             .filter(|(_, vcs)| {
-                vcs.iter()
-                    .any(|vc| vc.email.iter().any(|e| e.value.to_lowercase() == email))
+                vcs.iter().any(|vc| {
+                    vc.email
+                        .iter()
+                        .any(|e| e.value.to_lowercase() == mailbox.email.to_lowercase())
+                        && mailbox.name.as_ref().map_or(true, |name| {
+                            vc.formatted_name
+                                .iter()
+                                .any(|f| f.value.to_lowercase() == name.to_lowercase())
+                        })
+                })
             })
             .map(|(p, _)| p)
             .collect()
     }
 
-    fn create_contact(&mut self, email: String) -> PathBuf {
+    fn create_contact(&mut self, mailbox: Mailbox) -> PathBuf {
         let filename = uuid::Uuid::new_v4().to_string();
         let path = self.root.join(&filename).with_extension("vcf");
-        let vcard = VcardBuilder::new("".to_owned())
+        let vcard = VcardBuilder::new(mailbox.name.unwrap_or_default())
             .uid(
                 URI::try_from(format!("urn:uuid:{}", filename).as_str())
                     .unwrap()
                     .into_owned(),
             )
-            .email(email)
+            .email(mailbox.email)
             .finish();
         let mut f = File::create(&path).unwrap();
         f.write_all(vcard.to_string().as_bytes()).unwrap();
@@ -905,9 +934,44 @@ fn mailboxes_for_vcard(vcard: &Vcard) -> Vec<String> {
         .collect()
 }
 
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct Mailbox {
     name: Option<String>,
     email: String,
+}
+
+impl Mailbox {
+    fn from_line_at(line: &str, character: usize) -> Option<Self> {
+        let re = regex::Regex::new(
+            r#"(?i)"?(?<name>[\w \-']+)?"? ?<?\b(?<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b>?"#,
+        )
+        .unwrap();
+        let mut mailbox = None;
+        for captures in re.captures_iter(line) {
+            let mut start = None;
+            let mut end = None;
+            let mut mbox = Mailbox::default();
+
+            if let Some(name) = captures.name("name") {
+                start = Some(name.start());
+                end = Some(name.end());
+                mbox.name = Some(name.as_str().trim().to_owned());
+            }
+            if let Some(email) = captures.name("email") {
+                if start.is_none() {
+                    start = Some(email.start());
+                }
+                end = Some(email.end());
+                mbox.email = email.as_str().trim().to_owned();
+            }
+
+            if start.map_or(false, |s| s <= character) && end.map_or(false, |e| character < e) {
+                mailbox = Some(mbox);
+                break;
+            }
+        }
+        mailbox
+    }
 }
 
 impl FromStr for Mailbox {
@@ -945,7 +1009,7 @@ impl Display for Mailbox {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CreateContactCommandArguments {
-    email: String,
+    mailbox: Mailbox,
 }
 
 fn in_range(range: &Range, position: &Position) -> bool {
