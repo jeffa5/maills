@@ -9,8 +9,8 @@ A tool to help with writing emails.
 - [x] completion for email addresses, and contact names
 - [x] diagnostics for addresses not in your contacts
 - [ ] code action to add addresses to contacts
-    - create new contact if email is not with existing contact
-    - add email to existing contact
+    - [x] create new contact if email is not with existing contact
+    - [ ] add email to existing contact
 
 ## Installation
 
