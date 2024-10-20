@@ -69,7 +69,7 @@ fn server_capabilities() -> ServerCapabilities {
                 ..Default::default()
             },
         )),
-        code_action_provider: Some(lsp_types::CodeActionProviderCapability::Simple(true)),
+        // code_action_provider: Some(lsp_types::CodeActionProviderCapability::Simple(true)),
         // execute_command_provider: Some(ExecuteCommandOptions {
         //     commands: vec!["define".to_owned()],
         //     ..Default::default()
