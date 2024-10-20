@@ -59,4 +59,4 @@ nvim test.eml
 # Write some words and hit K to hover one
 ```
 
-It by default is set up for the `text` and `markdown` filetypes.
+It by default is set up for the `mail` filetype.
