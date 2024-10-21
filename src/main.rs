@@ -855,6 +855,7 @@ impl VCards {
             .finish();
         let mut f = File::create(&path).unwrap();
         f.write_all(vcard.to_string().as_bytes()).unwrap();
+        self.vcards.insert(path.clone(), vec![vcard]);
         path
     }
 }
