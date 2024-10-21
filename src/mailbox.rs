@@ -1,6 +1,14 @@
-use std::{fmt::Display, str::FromStr};
+use std::{fmt::Display, str::FromStr, sync::LazyLock};
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+
+static MAILBOX_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+            r#"(?i)(?<name>("[\w \-']+"|[\w \-']+))?\s*<?\b(?<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b>?"#,
+        )
+        .unwrap()
+});
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Mailbox {
@@ -10,12 +18,8 @@ pub struct Mailbox {
 
 impl Mailbox {
     pub fn from_line_at(line: &str, character: usize) -> Option<Self> {
-        let re = regex::Regex::new(
-            r#"(?i)(?<name>("[\w \-']+"|[\w \-']+))?\s*<?\b(?<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b>?"#,
-        )
-        .unwrap();
         let mut mailbox = None;
-        for captures in re.captures_iter(line) {
+        for captures in MAILBOX_REGEX.captures_iter(line) {
             let mut start = None;
             let mut end = None;
             let mut mbox = Mailbox::default();
