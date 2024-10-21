@@ -10,7 +10,7 @@ static MAILBOX_REGEX: LazyLock<Regex> = LazyLock::new(|| {
         .unwrap()
 });
 
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Mailbox {
     pub name: Option<String>,
     pub email: String,

@@ -785,8 +785,8 @@ impl VCards {
             .filter(|vc| match_vcard(vc, word))
             .flat_map(mailboxes_for_vcard)
             .unique()
-            .map(|email| CompletionItem {
-                label: email.to_owned(),
+            .map(|mailbox| CompletionItem {
+                label: mailbox.to_string(),
                 kind: Some(CompletionItemKind::TEXT),
                 ..Default::default()
             })
@@ -938,16 +938,22 @@ fn match_vcard(vc: &Vcard, word: &str) -> bool {
     matched_email || matched_fn || matched_nick
 }
 
-fn mailboxes_for_vcard(vcard: &Vcard) -> Vec<String> {
+fn mailboxes_for_vcard(vcard: &Vcard) -> Vec<Mailbox> {
     let formatted_name = vcard.formatted_name.first().map(|n| &n.value);
     vcard
         .email
         .iter()
         .map(|e| {
-            if let Some(n) = &formatted_name {
-                format!("{:?} <{}>", n, e.value)
+            if let Some(n) = formatted_name {
+                Mailbox {
+                    name: Some(n.to_owned()),
+                    email: e.value.clone(),
+                }
             } else {
-                e.value.clone()
+                Mailbox {
+                    name: None,
+                    email: e.value.clone(),
+                }
             }
         })
         .collect()
