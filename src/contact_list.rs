@@ -1,6 +1,6 @@
 use std::{fs::read_to_string, path::PathBuf};
 
-use crate::{ContactSource, Mailbox};
+use crate::{ContactSource, Location, Mailbox};
 
 pub struct ContactList {
     path: PathBuf,
@@ -40,8 +40,18 @@ impl ContactSource for ContactList {
             .any(|m| m.email.to_lowercase() == email.to_lowercase())
     }
 
-    fn filepaths(&self, _mailbox: &Mailbox) -> Vec<PathBuf> {
-        vec![self.path.clone()]
+    fn locations(&self, mailbox: &Mailbox) -> Vec<Location> {
+        let line = self.contacts.iter().enumerate().find_map(|(i, m)| {
+            if m == mailbox {
+                Some(i as u32)
+            } else {
+                None
+            }
+        });
+        vec![Location {
+            path: self.path.clone(),
+            line,
+        }]
     }
 
     fn create_contact(&mut self, _mailbox: Mailbox) -> Option<PathBuf> {

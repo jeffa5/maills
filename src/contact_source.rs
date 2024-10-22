@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use lsp_types::Url;
+
 use crate::Mailbox;
 
 pub trait ContactSource {
@@ -12,8 +14,8 @@ pub trait ContactSource {
     /// Whether the given mailbox is in the source.
     fn contains(&self, email: &str) -> bool;
 
-    /// Get the filepaths for the given mailbox.
-    fn filepaths(&self, mailbox: &Mailbox) -> Vec<PathBuf>;
+    /// Get the locations for the given mailbox.
+    fn locations(&self, mailbox: &Mailbox) -> Vec<Location>;
 
     /// Create the contact for the given mailbox, returning the path to it.
     fn create_contact(&mut self, mailbox: Mailbox) -> Option<PathBuf>;
@@ -45,10 +47,10 @@ impl ContactSource for Sources {
         self.sources.iter().any(|s| s.contains(email))
     }
 
-    fn filepaths(&self, mailbox: &Mailbox) -> Vec<PathBuf> {
+    fn locations(&self, mailbox: &Mailbox) -> Vec<Location> {
         self.sources
             .iter()
-            .flat_map(|s| s.filepaths(mailbox))
+            .flat_map(|s| s.locations(mailbox))
             .collect()
     }
 
@@ -59,5 +61,26 @@ impl ContactSource for Sources {
             }
         }
         None
+    }
+}
+
+pub struct Location {
+    pub path: PathBuf,
+    pub line: Option<u32>,
+}
+
+impl From<Location> for lsp_types::Location {
+    fn from(value: Location) -> Self {
+        lsp_types::Location {
+            uri: Url::from_file_path(value.path).unwrap(),
+            range: if let Some(line) = value.line {
+                lsp_types::Range {
+                    start: lsp_types::Position { line, character: 0 },
+                    end: lsp_types::Position { line, character: 0 },
+                }
+            } else {
+                lsp_types::Range::default()
+            },
+        }
     }
 }

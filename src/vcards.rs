@@ -9,7 +9,7 @@ use itertools::Itertools as _;
 use uriparse::URI;
 use vcard4::{property::Property as _, Vcard, VcardBuilder};
 
-use crate::{ContactSource, Mailbox};
+use crate::{ContactSource, Location, Mailbox};
 
 pub struct VCards {
     root: PathBuf,
@@ -44,7 +44,7 @@ impl ContactSource for VCards {
         })
     }
 
-    fn filepaths(&self, mailbox: &Mailbox) -> Vec<PathBuf> {
+    fn locations(&self, mailbox: &Mailbox) -> Vec<Location> {
         self.vcards
             .iter()
             .filter(|(_, vcs)| {
@@ -59,7 +59,10 @@ impl ContactSource for VCards {
                         })
                 })
             })
-            .map(|(p, _)| p.clone())
+            .map(|(p, _)| Location {
+                path: p.clone(),
+                line: None,
+            })
             .collect()
     }
 

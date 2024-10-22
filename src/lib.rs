@@ -9,4 +9,5 @@ pub use vcards::VCards;
 
 mod contact_source;
 pub use contact_source::ContactSource;
+pub use contact_source::Location;
 pub use contact_source::Sources;

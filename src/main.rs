@@ -22,7 +22,6 @@ use lsp_types::DiagnosticSeverity;
 use lsp_types::ExecuteCommandOptions;
 use lsp_types::InitializeParams;
 use lsp_types::InitializeResult;
-use lsp_types::Location;
 use lsp_types::Position;
 use lsp_types::PositionEncodingKind;
 use lsp_types::PublishDiagnosticsParams;
@@ -298,23 +297,20 @@ impl Server {
                                 )
                                 .unwrap();
 
-                            let vcard_paths = self
+                            let mut locations = self
                                 .get_mailbox_from_document(&tdp)
-                                .map(|mailbox| self.sources.filepaths(&mailbox))
+                                .map(|mailbox| self.sources.locations(&mailbox))
                                 .unwrap_or_default();
-                            let response = match vcard_paths.len() {
+                            let response = match locations.len() {
                                 0 => Message::Response(Response {
                                     id: r.id,
                                     result: None,
                                     error: None,
                                 }),
                                 1 => {
-                                    let resp =
-                                        lsp_types::GotoDefinitionResponse::Scalar(Location {
-                                            uri: Url::from_file_path(vcard_paths[0].clone())
-                                                .unwrap(),
-                                            range: Range::default(),
-                                        });
+                                    let resp = lsp_types::GotoDefinitionResponse::Scalar(
+                                        locations.remove(0).into(),
+                                    );
                                     Message::Response(Response {
                                         id: r.id,
                                         result: serde_json::to_value(resp).ok(),
@@ -323,13 +319,7 @@ impl Server {
                                 }
                                 _ => {
                                     let resp = lsp_types::GotoDefinitionResponse::Array(
-                                        vcard_paths
-                                            .iter()
-                                            .map(|p| Location {
-                                                uri: Url::from_file_path(p).unwrap(),
-                                                range: Range::default(),
-                                            })
-                                            .collect(),
+                                        locations.into_iter().map(|p| p.into()).collect(),
                                     );
                                     Message::Response(Response {
                                         id: r.id,
