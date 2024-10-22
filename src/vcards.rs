@@ -36,8 +36,12 @@ impl ContactSource for VCards {
             .collect()
     }
 
-    fn contains(&self, mailbox: &Mailbox) -> bool {
-        !self.get_by_mailbox(mailbox).is_empty()
+    fn contains(&self, email: &str) -> bool {
+        self.vcards.values().flatten().any(|vc| {
+            vc.email
+                .iter()
+                .any(|e| e.value.to_lowercase() == email.to_lowercase())
+        })
     }
 
     fn filepaths(&self, mailbox: &Mailbox) -> Vec<PathBuf> {

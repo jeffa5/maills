@@ -27,8 +27,10 @@ impl ContactSource for ContactList {
             .collect()
     }
 
-    fn contains(&self, mailbox: &Mailbox) -> bool {
-        self.contacts.contains(mailbox)
+    fn contains(&self, email: &str) -> bool {
+        self.contacts
+            .iter()
+            .any(|m| m.email.to_lowercase() == email.to_lowercase())
     }
 
     fn filepaths(&self, _mailbox: &Mailbox) -> Vec<PathBuf> {

@@ -10,7 +10,7 @@ pub trait ContactSource {
     fn find_matching(&self, word: &str) -> Vec<Mailbox>;
 
     /// Whether the given mailbox is in the source.
-    fn contains(&self, mailbox: &Mailbox) -> bool;
+    fn contains(&self, email: &str) -> bool;
 
     /// Get the filepaths for the given mailbox.
     fn filepaths(&self, mailbox: &Mailbox) -> Vec<PathBuf>;
@@ -41,8 +41,8 @@ impl ContactSource for Sources {
             .collect()
     }
 
-    fn contains(&self, mailbox: &Mailbox) -> bool {
-        self.sources.iter().any(|s| s.contains(mailbox))
+    fn contains(&self, email: &str) -> bool {
+        self.sources.iter().any(|s| s.contains(email))
     }
 
     fn filepaths(&self, mailbox: &Mailbox) -> Vec<PathBuf> {

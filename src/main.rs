@@ -649,7 +649,7 @@ impl Server {
     fn refresh_diagnostics(&mut self, file: &str) -> Vec<Diagnostic> {
         let content = self.open_files.get(file).unwrap();
         // from https://www.regular-expressions.info/email.html
-        let re = regex::Regex::new(r"(?mi)\b([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b").unwrap();
+        let re = regex::Regex::new(r"(?i)\b([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b").unwrap();
         let mut email_locations = Vec::new();
         for mtch in re.find_iter(content) {
             let start = mtch.start();
@@ -659,12 +659,7 @@ impl Server {
         }
         let diagnostics = email_locations
             .iter()
-            .filter(|(e, _, _)| {
-                self.sources.contains(&Mailbox {
-                    name: None,
-                    email: e.to_string(),
-                })
-            })
+            .filter(|(e, _, _)| !self.sources.contains(e))
             .map(|(_, start, end)| {
                 let li = LineIndex::new(content);
                 let start = li.line_col(TextSize::new(*start as u32));
