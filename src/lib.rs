@@ -1,8 +1,8 @@
 mod mailbox;
 pub use mailbox::Mailbox;
 
-mod contactlist;
-pub use contactlist::ContactList;
+mod contact_list;
+pub use contact_list::ContactList;
 
 mod vcards;
 pub use vcards::VCards;
