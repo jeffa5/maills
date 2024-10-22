@@ -212,6 +212,13 @@ impl Server {
         }
 
         if let Some(contact_list_file) = init_opts.contact_list_file {
+            let contact_list_file = if contact_list_file.starts_with("~/") {
+                dirs::home_dir()
+                    .unwrap()
+                    .join(contact_list_file.strip_prefix("~/").unwrap())
+            } else {
+                contact_list_file
+            };
             sources
                 .sources
                 .push(Box::new(ContactList::new(contact_list_file)));
