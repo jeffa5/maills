@@ -1,10 +1,44 @@
 use std::{fs::read_to_string, path::PathBuf};
 
-use crate::Mailbox;
+use crate::{ContactSource, Mailbox};
 
 pub struct ContactList {
     path: PathBuf,
     contacts: Vec<Mailbox>,
+}
+
+impl ContactSource for ContactList {
+    fn render(&self, mailbox: &Mailbox) -> String {
+        mailbox.to_string()
+    }
+
+    fn find_matching(&self, word: &str) -> Vec<Mailbox> {
+        self.contacts
+            .iter()
+            .filter(|m| {
+                let matched_name = m
+                    .name
+                    .as_ref()
+                    .map_or(false, |n| n.to_lowercase().contains(word));
+                let matched_email = m.email.to_lowercase().contains(word);
+                matched_name || matched_email
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn contains(&self, mailbox: &Mailbox) -> bool {
+        self.contacts.contains(mailbox)
+    }
+
+    fn filepaths(&self, _mailbox: &Mailbox) -> Vec<PathBuf> {
+        vec![self.path.clone()]
+    }
+
+    fn create_contact(&mut self, _mailbox: Mailbox) -> Option<PathBuf> {
+        // not supported
+        None
+    }
 }
 
 impl ContactList {
