@@ -4,14 +4,9 @@ if require('lspconfig.configs').maills ~= nil then
   require('lspconfig.configs').maills = nil
 end
 
-require('lspconfig.configs').wordnet = {
-  default_config = {
-    filetypes = {},
-    root_dir = function(_)
-      return '/'
-    end,
-  },
-}
+if require('lspconfig.configs').wordnet ~= nil then
+  require('lspconfig.configs').wordnet = nil
+end
 
 require('lspconfig.configs').maills_dev = {
   default_config = {
@@ -24,7 +19,7 @@ require('lspconfig.configs').maills_dev = {
 }
 require('lspconfig').maills_dev.setup {
   -- init_options = { vcard_dir = os.getenv("VCARD_DIR") },
-  init_options = { vcard_dir = "~/contacts/jeffas" },
+  init_options = { vcard_dir = "~/contacts/jeffas", contact_list_file = "~/contacts/list" },
 }
 
 -- or without lspconfig
