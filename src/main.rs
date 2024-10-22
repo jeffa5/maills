@@ -33,8 +33,10 @@ use lsp_types::ShowDocumentParams;
 use lsp_types::TextDocumentPositionParams;
 use lsp_types::TextDocumentSyncKind;
 use lsp_types::Url;
+use maills::ContactList;
 use maills::ContactSource as _;
 use maills::Mailbox;
+use maills::Sources;
 use maills::VCards;
 use serde::Deserialize;
 use serde::Serialize;
@@ -156,7 +158,7 @@ fn connect(stdio: bool) -> (lsp_types::InitializeParams, Connection, IoThreads) 
 }
 
 struct Server {
-    vcards: VCards,
+    sources: Sources,
     open_files: BTreeMap<String, String>,
     diagnostics: Vec<Diagnostic>,
     shutdown: bool,
@@ -164,7 +166,8 @@ struct Server {
 
 #[derive(Serialize, Deserialize)]
 struct InitializationOptions {
-    vcard_dir: PathBuf,
+    vcard_dir: Option<PathBuf>,
+    contact_list_file: Option<PathBuf>,
     enable_completion: Option<bool>,
     enable_hover: Option<bool>,
     enable_code_actions: Option<bool>,
@@ -196,15 +199,30 @@ impl Server {
                 .unwrap();
             panic!("No initialization options given, need it for vcard directory location at least")
         };
-        let vcard_root = if init_opts.vcard_dir.starts_with("~/") {
-            dirs::home_dir()
-                .unwrap()
-                .join(init_opts.vcard_dir.strip_prefix("~/").unwrap())
-        } else {
-            init_opts.vcard_dir
-        };
+        let mut sources = Sources::default();
+        if let Some(vcard_dir) = init_opts.vcard_dir {
+            let vcard_root = if vcard_dir.starts_with("~/") {
+                dirs::home_dir()
+                    .unwrap()
+                    .join(vcard_dir.strip_prefix("~/").unwrap())
+            } else {
+                vcard_dir
+            };
+            sources.sources.push(Box::new(VCards::new(vcard_root)));
+        }
+
+        if let Some(contact_list_file) = init_opts.contact_list_file {
+            sources
+                .sources
+                .push(Box::new(ContactList::new(contact_list_file)));
+        }
+
+        if sources.sources.is_empty() {
+            panic!("Initialization options must specify at least one of `vcard_dir` or `contact_list_file`");
+        }
+
         Self {
-            vcards: VCards::new(vcard_root),
+            sources,
             open_files: BTreeMap::new(),
             diagnostics: Vec::new(),
             shutdown: false,
@@ -241,7 +259,7 @@ impl Server {
 
                             let mailbox = self.get_mailbox_from_document(&tdp);
                             let response = if let Some(mailbox) = mailbox {
-                                let text = self.vcards.render(&mailbox);
+                                let text = self.sources.render(&mailbox);
                                 let resp = lsp_types::Hover {
                                     contents: lsp_types::HoverContents::Markup(
                                         lsp_types::MarkupContent {
@@ -275,7 +293,7 @@ impl Server {
 
                             let vcard_paths = self
                                 .get_mailbox_from_document(&tdp)
-                                .map(|mailbox| self.vcards.filepaths(&mailbox))
+                                .map(|mailbox| self.sources.filepaths(&mailbox))
                                 .unwrap_or_default();
                             let response = match vcard_paths.len() {
                                 0 => Message::Response(Response {
@@ -327,7 +345,7 @@ impl Server {
                                 Some(word) => {
                                     let limit = 100;
                                     let lower_word = word.to_lowercase();
-                                    let matches = self.vcards.find_matching(&lower_word);
+                                    let matches = self.sources.find_matching(&lower_word);
                                     let completion_items = matches
                                         .into_iter()
                                         .map(|mailbox| CompletionItem {
@@ -363,7 +381,7 @@ impl Server {
                                     .unwrap();
 
                             let mailbox = Mailbox::from_str(&ci.label).unwrap();
-                            let doc = self.vcards.render(&mailbox);
+                            let doc = self.sources.render(&mailbox);
                             ci.documentation = Some(lsp_types::Documentation::MarkupContent(
                                 lsp_types::MarkupContent {
                                     kind: lsp_types::MarkupKind::Markdown,
@@ -438,7 +456,7 @@ impl Server {
                                         arg,
                                     ) {
                                         Ok(args) => {
-                                            let path = self.vcards.create_contact(args.mailbox);
+                                            let path = self.sources.create_contact(args.mailbox);
                                             if let Some(path) = path {
                                                 let params = ShowDocumentParams {
                                                     uri: Url::from_file_path(path).unwrap(),
@@ -642,7 +660,7 @@ impl Server {
         let diagnostics = email_locations
             .iter()
             .filter(|(e, _, _)| {
-                self.vcards.contains(&Mailbox {
+                self.sources.contains(&Mailbox {
                     name: None,
                     email: e.to_string(),
                 })
