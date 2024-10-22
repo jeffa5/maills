@@ -9,7 +9,14 @@ pub struct ContactList {
 
 impl ContactSource for ContactList {
     fn render(&self, mailbox: &Mailbox) -> String {
-        mailbox.to_string()
+        let mut lines = Vec::new();
+        if let Some(name) = &mailbox.name {
+            lines.push(format!("# {}", name));
+            lines.push(String::new());
+        }
+        lines.push("Email:".to_owned());
+        lines.push(format!("- {}", mailbox.email));
+        lines.join("\n")
     }
 
     fn find_matching(&self, word: &str) -> Vec<Mailbox> {
