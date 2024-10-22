@@ -1,5 +1,4 @@
 use clap::Parser;
-use itertools::Itertools;
 use line_index::LineIndex;
 use line_index::TextSize;
 use lsp_server::ErrorCode;
@@ -34,20 +33,14 @@ use lsp_types::ShowDocumentParams;
 use lsp_types::TextDocumentPositionParams;
 use lsp_types::TextDocumentSyncKind;
 use lsp_types::Url;
+use maills::ContactSource as _;
 use maills::Mailbox;
+use maills::VCards;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::fs::read_dir;
-use std::fs::read_to_string;
-use std::fs::File;
-use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
-use uriparse::URI;
-use vcard4::property::Property;
-use vcard4::Vcard;
-use vcard4::VcardBuilder;
 
 const CREATE_CONTACT_COMMAND: &str = "create_contact";
 
@@ -246,11 +239,9 @@ impl Server {
                                 )
                                 .unwrap();
 
-                            let vcards = self
-                                .get_mailbox_from_document(&tdp)
-                                .map(|mailbox| self.vcards.get_by_mailbox(&mailbox))
-                                .unwrap_or_default();
-                            let response = if let Some(text) = self.vcards.hover(&vcards) {
+                            let mailbox = self.get_mailbox_from_document(&tdp);
+                            let response = if let Some(mailbox) = mailbox {
+                                let text = self.vcards.render(&mailbox);
                                 let resp = lsp_types::Hover {
                                     contents: lsp_types::HoverContents::Markup(
                                         lsp_types::MarkupContent {
@@ -284,7 +275,7 @@ impl Server {
 
                             let vcard_paths = self
                                 .get_mailbox_from_document(&tdp)
-                                .map(|mailbox| self.vcards.find_contact_paths_by_mailbox(&mailbox))
+                                .map(|mailbox| self.vcards.filepaths(&mailbox))
                                 .unwrap_or_default();
                             let response = match vcard_paths.len() {
                                 0 => Message::Response(Response {
@@ -295,7 +286,8 @@ impl Server {
                                 1 => {
                                     let resp =
                                         lsp_types::GotoDefinitionResponse::Scalar(Location {
-                                            uri: Url::from_file_path(vcard_paths[0]).unwrap(),
+                                            uri: Url::from_file_path(vcard_paths[0].clone())
+                                                .unwrap(),
                                             range: Range::default(),
                                         });
                                     Message::Response(Response {
@@ -335,7 +327,16 @@ impl Server {
                                 Some(word) => {
                                     let limit = 100;
                                     let lower_word = word.to_lowercase();
-                                    let completion_items = self.vcards.complete(&lower_word, limit);
+                                    let matches = self.vcards.find_matching(&lower_word);
+                                    let completion_items = matches
+                                        .into_iter()
+                                        .map(|mailbox| CompletionItem {
+                                            label: mailbox.to_string(),
+                                            kind: Some(CompletionItemKind::TEXT),
+                                            ..Default::default()
+                                        })
+                                        .take(limit)
+                                        .collect::<Vec<_>>();
                                     let resp =
                                         lsp_types::CompletionResponse::List(CompletionList {
                                             is_incomplete: completion_items.len() == limit,
@@ -362,26 +363,18 @@ impl Server {
                                     .unwrap();
 
                             let mailbox = Mailbox::from_str(&ci.label).unwrap();
-                            let vcards = self.vcards.get_by_mailbox(&mailbox);
-                            let response = if let Some(doc) = self.vcards.hover(&vcards) {
-                                ci.documentation = Some(lsp_types::Documentation::MarkupContent(
-                                    lsp_types::MarkupContent {
-                                        kind: lsp_types::MarkupKind::Markdown,
-                                        value: doc,
-                                    },
-                                ));
-                                Message::Response(Response {
-                                    id: r.id,
-                                    result: serde_json::to_value(ci).ok(),
-                                    error: None,
-                                })
-                            } else {
-                                Message::Response(Response {
-                                    id: r.id,
-                                    result: None,
-                                    error: None,
-                                })
-                            };
+                            let doc = self.vcards.render(&mailbox);
+                            ci.documentation = Some(lsp_types::Documentation::MarkupContent(
+                                lsp_types::MarkupContent {
+                                    kind: lsp_types::MarkupKind::Markdown,
+                                    value: doc,
+                                },
+                            ));
+                            let response = Message::Response(Response {
+                                id: r.id,
+                                result: serde_json::to_value(ci).ok(),
+                                error: None,
+                            });
 
                             c.sender.send(response).unwrap()
                         }
@@ -446,27 +439,35 @@ impl Server {
                                     ) {
                                         Ok(args) => {
                                             let path = self.vcards.create_contact(args.mailbox);
-
-                                            let params = ShowDocumentParams {
-                                                uri: Url::from_file_path(path).unwrap(),
-                                                external: None,
-                                                take_focus: None,
-                                                selection: None,
-                                            };
-                                            c.sender
-                                                .send(Message::Request(lsp_server::Request {
-                                                    id: RequestId::from(0),
-                                                    method:
-                                                        lsp_types::request::ShowDocument::METHOD
-                                                            .to_owned(),
-                                                    params: serde_json::to_value(params).unwrap(),
-                                                }))
-                                                .unwrap();
-                                            Message::Response(Response {
-                                                id: r.id,
-                                                result: None,
-                                                error: None,
-                                            })
+                                            if let Some(path) = path {
+                                                let params = ShowDocumentParams {
+                                                    uri: Url::from_file_path(path).unwrap(),
+                                                    external: None,
+                                                    take_focus: None,
+                                                    selection: None,
+                                                };
+                                                c.sender
+                                                    .send(Message::Request(lsp_server::Request {
+                                                        id: RequestId::from(0),
+                                                        method:
+                                                            lsp_types::request::ShowDocument::METHOD
+                                                                .to_owned(),
+                                                        params: serde_json::to_value(params)
+                                                            .unwrap(),
+                                                    }))
+                                                    .unwrap();
+                                                Message::Response(Response {
+                                                    id: r.id,
+                                                    result: None,
+                                                    error: None,
+                                                })
+                                            } else {
+                                                Message::Response(Response {
+                                                    id: r.id,
+                                                    result: None,
+                                                    error: None,
+                                                })
+                                            }
                                         }
                                         _ => Message::Response(Response {
                                             id: r.id,
@@ -640,7 +641,12 @@ impl Server {
         }
         let diagnostics = email_locations
             .iter()
-            .filter(|(e, _, _)| self.vcards.search_by_email(e).is_empty())
+            .filter(|(e, _, _)| {
+                self.vcards.contains(&Mailbox {
+                    name: None,
+                    email: e.to_string(),
+                })
+            })
             .map(|(_, start, end)| {
                 let li = LineIndex::new(content);
                 let start = li.line_col(TextSize::new(*start as u32));
@@ -727,184 +733,6 @@ fn main() {
     }
 }
 
-struct VCards {
-    root: PathBuf,
-    vcards: BTreeMap<PathBuf, Vec<vcard4::Vcard>>,
-}
-
-impl VCards {
-    fn new(value: PathBuf) -> Self {
-        let mut s = Self {
-            root: value,
-            vcards: BTreeMap::new(),
-        };
-        s.load_vcards();
-        s
-    }
-
-    fn load_vcards(&mut self) {
-        let mut vcard_files = Vec::new();
-        for entry in read_dir(&self.root).unwrap() {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            if path.is_file() && path.extension().unwrap_or_default() == "vcf" {
-                vcard_files.push(path);
-            }
-        }
-
-        self.vcards.clear();
-        for path in vcard_files {
-            let content = read_to_string(&path).unwrap_or_default();
-            match vcard4::parse_loose(content) {
-                Ok(vcards) => self.vcards.entry(path).or_default().extend(vcards),
-                Err(err) => {
-                    // skip card that couldn't be loaded
-                    eprintln!("Failed to load vcard at {:?}: {}", path, err);
-                }
-            }
-        }
-    }
-
-    fn hover(&self, cards: &[&Vcard]) -> Option<String> {
-        if cards.is_empty() {
-            return None;
-        }
-        Some(
-            cards
-                .iter()
-                .map(|vc| render_vcard(vc))
-                .collect::<Vec<_>>()
-                .join("\n\n"),
-        )
-    }
-
-    fn complete(&self, word: &str, limit: usize) -> Vec<CompletionItem> {
-        self.vcards
-            .values()
-            .flatten()
-            .filter(|vc| match_vcard(vc, word))
-            .flat_map(mailboxes_for_vcard)
-            .unique()
-            .map(|mailbox| CompletionItem {
-                label: mailbox.to_string(),
-                kind: Some(CompletionItemKind::TEXT),
-                ..Default::default()
-            })
-            .take(limit)
-            .collect()
-    }
-
-    fn search_by_email(&self, email: &str) -> Vec<&Vcard> {
-        self.vcards
-            .values()
-            .flatten()
-            .filter(|vc| {
-                vc.email
-                    .iter()
-                    .any(|e| e.value.to_lowercase() == email.to_lowercase())
-            })
-            .collect()
-    }
-
-    fn get_by_mailbox(&self, mailbox: &Mailbox) -> Vec<&Vcard> {
-        self.vcards
-            .values()
-            .flatten()
-            .filter(|vc| {
-                vc.email
-                    .iter()
-                    .any(|e| e.value.to_lowercase() == mailbox.email.to_lowercase())
-                    && mailbox.name.as_ref().map_or(true, |name| {
-                        vc.formatted_name
-                            .iter()
-                            .any(|f| f.value.to_lowercase() == name.to_lowercase())
-                    })
-            })
-            .collect()
-    }
-
-    fn find_contact_paths_by_mailbox(&self, mailbox: &Mailbox) -> Vec<&PathBuf> {
-        self.vcards
-            .iter()
-            .filter(|(_, vcs)| {
-                vcs.iter().any(|vc| {
-                    vc.email
-                        .iter()
-                        .any(|e| e.value.to_lowercase() == mailbox.email.to_lowercase())
-                        && mailbox.name.as_ref().map_or(true, |name| {
-                            vc.formatted_name
-                                .iter()
-                                .any(|f| f.value.to_lowercase() == name.to_lowercase())
-                        })
-                })
-            })
-            .map(|(p, _)| p)
-            .collect()
-    }
-
-    fn create_contact(&mut self, mailbox: Mailbox) -> PathBuf {
-        let filename = uuid::Uuid::new_v4().to_string();
-        let path = self.root.join(&filename).with_extension("vcf");
-        let vcard = VcardBuilder::new(mailbox.name.unwrap_or_default())
-            .uid(
-                URI::try_from(format!("urn:uuid:{}", filename).as_str())
-                    .unwrap()
-                    .into_owned(),
-            )
-            .email(mailbox.email)
-            .finish();
-        let mut f = File::create(&path).unwrap();
-        f.write_all(vcard.to_string().as_bytes()).unwrap();
-        self.vcards.insert(path.clone(), vec![vcard]);
-        path
-    }
-}
-
-fn render_vcard(vcard: &Vcard) -> String {
-    let mut lines = Vec::new();
-    if let Some(formatted_name) = vcard.formatted_name.first() {
-        lines.push(format!("# {}", formatted_name.value));
-        lines.push(String::new());
-    }
-    if let Some(nick) = vcard.nickname.first() {
-        lines.push(format!("_{}_", nick.value));
-        lines.push(String::new());
-    }
-    if !vcard.email.is_empty() {
-        lines.push("Email:".to_owned());
-        for e in vcard.email.iter() {
-            let mut line = "- ".to_owned();
-            if let Some(typ) = &e
-                .parameters()
-                .and_then(|p| p.types.as_ref().and_then(|types| types.first()))
-            {
-                line.push_str(&typ.to_string());
-                line.push_str(": ");
-            }
-            line.push_str(&e.value);
-            lines.push(line);
-        }
-        lines.push(String::new());
-    }
-    if !vcard.tel.is_empty() {
-        lines.push("Telephone:".to_owned());
-        for e in vcard.tel.iter() {
-            let mut line = "- ".to_owned();
-            if let Some(typ) = &e
-                .parameters()
-                .and_then(|p| p.types.as_ref().and_then(|types| types.first()))
-            {
-                line.push_str(&typ.to_string());
-                line.push_str(": ");
-            }
-            line.push_str(&e.to_string());
-            lines.push(line);
-        }
-        lines.push(String::new());
-    }
-    lines.join("\n")
-}
-
 fn resolve_position(content: &str, pos: Position) -> usize {
     let mut count = 0;
     let mut lines = 0;
@@ -921,43 +749,6 @@ fn resolve_position(content: &str, pos: Position) -> usize {
         }
     }
     count
-}
-
-fn match_vcard(vc: &Vcard, word: &str) -> bool {
-    let matched_email = vc
-        .email
-        .iter()
-        .any(|e| e.value.to_lowercase().contains(word));
-    let matched_fn = vc
-        .formatted_name
-        .iter()
-        .any(|n| n.value.to_lowercase().contains(word));
-    let matched_nick = vc
-        .nickname
-        .iter()
-        .any(|n| n.value.to_lowercase().contains(word));
-    matched_email || matched_fn || matched_nick
-}
-
-fn mailboxes_for_vcard(vcard: &Vcard) -> Vec<Mailbox> {
-    let formatted_name = vcard.formatted_name.first().map(|n| &n.value);
-    vcard
-        .email
-        .iter()
-        .map(|e| {
-            if let Some(n) = formatted_name {
-                Mailbox {
-                    name: Some(n.to_owned()),
-                    email: e.value.clone(),
-                }
-            } else {
-                Mailbox {
-                    name: None,
-                    email: e.value.clone(),
-                }
-            }
-        })
-        .collect()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
