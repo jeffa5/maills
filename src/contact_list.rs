@@ -1,10 +1,15 @@
-use std::{fs::read_to_string, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    fs::read_to_string,
+    path::PathBuf,
+};
 
 use crate::{ContactSource, Location, Mailbox};
 
 pub struct ContactList {
     path: PathBuf,
-    contacts: Vec<Mailbox>,
+    contact_lines: HashMap<Mailbox, u32>,
+    emails_lower: HashSet<String>,
 }
 
 impl ContactSource for ContactList {
@@ -20,8 +25,8 @@ impl ContactSource for ContactList {
     }
 
     fn find_matching(&self, word: &str) -> Vec<Mailbox> {
-        self.contacts
-            .iter()
+        self.contact_lines
+            .keys()
             .filter(|m| {
                 let matched_name = m
                     .name
@@ -35,19 +40,11 @@ impl ContactSource for ContactList {
     }
 
     fn contains(&self, email: &str) -> bool {
-        self.contacts
-            .iter()
-            .any(|m| m.email.to_lowercase() == email.to_lowercase())
+        self.emails_lower.contains(&email.to_lowercase())
     }
 
     fn locations(&self, mailbox: &Mailbox) -> Vec<Location> {
-        let line = self.contacts.iter().enumerate().find_map(|(i, m)| {
-            if m == mailbox {
-                Some(i as u32)
-            } else {
-                None
-            }
-        });
+        let line = self.contact_lines.get(mailbox).copied();
         vec![Location {
             path: self.path.clone(),
             line,
@@ -64,7 +61,8 @@ impl ContactList {
     pub fn new(path: PathBuf) -> Self {
         let mut s = Self {
             path,
-            contacts: Vec::new(),
+            contact_lines: HashMap::new(),
+            emails_lower: HashSet::new(),
         };
         s.load_contactlist();
         s
@@ -72,7 +70,7 @@ impl ContactList {
 
     fn load_contactlist(&mut self) {
         let content = read_to_string(&self.path).unwrap();
-        for line in content.lines() {
+        for (line_number, line) in content.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
@@ -84,8 +82,9 @@ impl ContactList {
             } else {
                 None
             };
+            self.emails_lower.insert(email.to_lowercase());
             let mbox = Mailbox { name, email };
-            self.contacts.push(mbox);
+            self.contact_lines.insert(mbox, line_number as u32);
         }
     }
 }
