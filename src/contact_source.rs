@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use itertools::Itertools as _;
 use lsp_types::Url;
 
 use crate::Mailbox;
@@ -40,6 +41,7 @@ impl ContactSource for Sources {
         self.sources
             .iter()
             .flat_map(|s| s.find_matching(word))
+            .unique()
             .collect()
     }
 
