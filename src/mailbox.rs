@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 static MAILBOX_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     regex::Regex::new(
-            r#"(?i)(?<name>("[\w \-']+"|[\w \-']+))?\s*<?\b(?<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b>?"#,
+            r#"(?i)(?<name>("[\w \-']+"|[\w \-']+))?\s*<?\b(?<email>[A-Z0-9._%+-~/]+@[A-Z0-9.-]+\.[A-Z]{2,})\b>?"#,
         )
         .unwrap()
 });
