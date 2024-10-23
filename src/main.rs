@@ -167,6 +167,7 @@ struct Server {
 struct InitializationOptions {
     vcard_dir: Option<PathBuf>,
     contact_list_file: Option<PathBuf>,
+    contact_list_diagnostics: Option<bool>,
     enable_completion: Option<bool>,
     enable_hover: Option<bool>,
     enable_code_actions: Option<bool>,
@@ -218,9 +219,11 @@ impl Server {
             } else {
                 contact_list_file
             };
-            sources
-                .sources
-                .push(Box::new(ContactList::new(contact_list_file)));
+            let contact_list_diagnostics = init_opts.contact_list_diagnostics.unwrap_or(false);
+            sources.sources.push(Box::new(ContactList::new(
+                contact_list_file,
+                contact_list_diagnostics,
+            )));
         }
 
         if sources.sources.is_empty() {

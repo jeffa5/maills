@@ -8,6 +8,7 @@ use crate::{ContactSource, Location, Mailbox};
 
 pub struct ContactList {
     path: PathBuf,
+    diagnostics: bool,
     contact_lines: HashMap<Mailbox, u32>,
     emails_lower: HashSet<String>,
 }
@@ -40,7 +41,12 @@ impl ContactSource for ContactList {
     }
 
     fn contains(&self, email: &str) -> bool {
-        self.emails_lower.contains(&email.to_lowercase())
+        if self.diagnostics {
+            self.emails_lower.contains(&email.to_lowercase())
+        } else {
+            // contains nothing with respec to diagnostics
+            false
+        }
     }
 
     fn locations(&self, mailbox: &Mailbox) -> Vec<Location> {
@@ -58,9 +64,10 @@ impl ContactSource for ContactList {
 }
 
 impl ContactList {
-    pub fn new(path: PathBuf) -> Self {
+    pub fn new(path: PathBuf, diagnostics: bool) -> Self {
         let mut s = Self {
             path,
+            diagnostics,
             contact_lines: HashMap::new(),
             emails_lower: HashSet::new(),
         };
