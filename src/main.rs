@@ -52,8 +52,13 @@ struct Args {
     stdio: bool,
 }
 
-fn log(message: impl Serialize) -> Message {
-    Message::Notification(Notification::new(LogMessage::METHOD.to_string(), message))
+fn log(c: &Connection, message: impl Serialize) {
+    c.sender
+        .send(Message::Notification(Notification::new(
+            LogMessage::METHOD.to_string(),
+            message,
+        )))
+        .unwrap();
 }
 
 fn server_capabilities() -> ServerCapabilities {
@@ -274,16 +279,16 @@ impl Server {
                             let none: Option<()> = None;
                             vec![Message::Response(Response::new_ok(r.id, none))]
                         }
-                        _ => vec![log(format!("Unmatched request received: {}", r.method))],
+                        _ => {
+                            log(&c, format!("Unmatched request received: {}", r.method));
+                            vec![]
+                        }
                     };
                     for message in messages {
                         c.sender.send(message).unwrap();
                     }
                 }
-                Message::Response(r) => c
-                    .sender
-                    .send(log(format!("Unmatched response received: {}", r.id)))
-                    .unwrap(),
+                Message::Response(r) => log(&c, format!("Unmatched response received: {}", r.id)),
                 Message::Notification(n) => {
                     match &n.method[..] {
                         lsp_types::notification::DidOpenTextDocument::METHOD => {
@@ -359,13 +364,7 @@ impl Server {
                                 ));
                             }
                         }
-                        _ => c
-                            .sender
-                            .send(log(format!(
-                                "Unmatched notification received: {}",
-                                n.method
-                            )))
-                            .unwrap(),
+                        _ => log(&c, format!("Unmatched notification received: {}", n.method)),
                     }
                 }
             }
