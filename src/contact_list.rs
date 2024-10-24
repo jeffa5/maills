@@ -6,10 +6,16 @@ use std::{
 
 use crate::{ContactSource, Location, Mailbox};
 
+struct ContactListEntry {
+    mailbox: Mailbox,
+    line: u32,
+}
+
 pub struct ContactList {
     path: PathBuf,
     diagnostics: bool,
-    contact_lines: HashMap<Mailbox, u32>,
+    contacts: Vec<ContactListEntry>,
+    contact_lines: HashMap<Mailbox, usize>,
     emails_lower: HashSet<String>,
 }
 
@@ -26,9 +32,12 @@ impl ContactSource for ContactList {
     }
 
     fn find_matching(&self, word: &str) -> Vec<Mailbox> {
-        self.contact_lines
-            .keys()
+        self.contacts
+            .iter()
+            .map(|e| &e.mailbox)
             .filter(|m| {
+                // TODO: make this contains check cheaper, rather than searching every entry
+                // Likely a custom trie
                 let matched_name = m
                     .name
                     .as_ref()
@@ -50,7 +59,11 @@ impl ContactSource for ContactList {
     }
 
     fn locations(&self, mailbox: &Mailbox) -> Vec<Location> {
-        let line = self.contact_lines.get(mailbox).copied();
+        let line = self
+            .contact_lines
+            .get(mailbox)
+            .map(|i| &self.contacts[*i].line)
+            .copied();
         vec![Location {
             path: self.path.clone(),
             line,
@@ -68,6 +81,7 @@ impl ContactList {
         let mut s = Self {
             path,
             diagnostics,
+            contacts: Vec::new(),
             contact_lines: HashMap::new(),
             emails_lower: HashSet::new(),
         };
@@ -91,7 +105,11 @@ impl ContactList {
             };
             self.emails_lower.insert(email.to_lowercase());
             let mbox = Mailbox { name, email };
-            self.contact_lines.insert(mbox, line_number as u32);
+            self.contact_lines.insert(mbox.clone(), self.contacts.len());
+            self.contacts.push(ContactListEntry {
+                mailbox: mbox,
+                line: line_number as u32,
+            });
         }
     }
 }
