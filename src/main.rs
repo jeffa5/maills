@@ -61,6 +61,15 @@ fn log(c: &Connection, message: impl Serialize) {
         .unwrap();
 }
 
+fn notify(c: &Connection, method: &str, params: impl Serialize) {
+    c.sender
+        .send(Message::Notification(Notification::new(
+            method.to_owned(),
+            params,
+        )))
+        .unwrap();
+}
+
 fn server_capabilities() -> ServerCapabilities {
     ServerCapabilities {
         hover_provider: Some(lsp_types::HoverProviderCapability::Simple(true)),
@@ -109,25 +118,20 @@ fn connect(stdio: bool) -> (lsp_types::InitializeParams, Connection, IoThreads) 
         match serde_json::from_value::<InitializationOptions>(io.clone()) {
             Ok(v) => v,
             Err(err) => {
-                connection
-                    .sender
-                    .send(Message::Notification(Notification::new(
-                        ShowMessage::METHOD.to_string(),
-                        format!("Invalid initialization options: {err}"),
-                    )))
-                    .unwrap();
+                notify(
+                    &connection,
+                    ShowMessage::METHOD,
+                    format!("Invalid initialization options: {err}"),
+                );
                 panic!("Invalid initialization options: {err}")
             }
         }
     } else {
-        connection
-            .sender
-            .send(Message::Notification(Notification::new(
-                ShowMessage::METHOD.to_string(),
-                "No initialization options given, need it for vcard directory location at least"
-                    .to_string(),
-            )))
-            .unwrap();
+        notify(
+            &connection,
+            ShowMessage::METHOD,
+            "No initialization options given, need it for vcard directory location at least",
+        );
         panic!("No initialization options given, need it for vcard directory location at least")
     };
     if !init_opts.enable_completion.unwrap_or(true) {
@@ -181,23 +185,20 @@ impl Server {
             match serde_json::from_value::<InitializationOptions>(io) {
                 Ok(v) => v,
                 Err(err) => {
-                    c.sender
-                        .send(Message::Notification(Notification::new(
-                            ShowMessage::METHOD.to_string(),
-                            format!("Invalid initialization options: {err}"),
-                        )))
-                        .unwrap();
+                    notify(
+                        c,
+                        ShowMessage::METHOD,
+                        format!("Invalid initialization options: {err}"),
+                    );
                     panic!("Invalid initialization options: {err}")
                 }
             }
         } else {
-            c.sender
-                .send(Message::Notification(Notification::new(
-                    ShowMessage::METHOD.to_string(),
-                    "No initialization options given, need it for vcard directory location at least"
-                        .to_string(),
-                )))
-                .unwrap();
+            notify(
+                c,
+                ShowMessage::METHOD,
+                "No initialization options given, need it for vcard directory location at least",
+            );
             panic!("No initialization options given, need it for vcard directory location at least")
         };
         let mut sources = Sources::default();
@@ -302,16 +303,15 @@ impl Server {
                             );
                             let diagnostics =
                                 self.refresh_diagnostics(dotdp.text_document.uri.as_ref());
-                            c.sender
-                                .send(Message::Notification(Notification::new(
-                                    PublishDiagnostics::METHOD.to_owned(),
-                                    PublishDiagnosticsParams {
-                                        uri: dotdp.text_document.uri,
-                                        diagnostics,
-                                        version: Some(dotdp.text_document.version),
-                                    },
-                                )))
-                                .unwrap();
+                            notify(
+                                &c,
+                                PublishDiagnostics::METHOD,
+                                PublishDiagnosticsParams {
+                                    uri: dotdp.text_document.uri,
+                                    diagnostics,
+                                    version: Some(dotdp.text_document.version),
+                                },
+                            )
                             // log(
                             //     &c,
                             //     format!(
@@ -329,16 +329,15 @@ impl Server {
                             self.open_files.apply_changes(&doc, dctdp.content_changes);
                             let diagnostics =
                                 self.refresh_diagnostics(dctdp.text_document.uri.as_ref());
-                            c.sender
-                                .send(Message::Notification(Notification::new(
-                                    PublishDiagnostics::METHOD.to_owned(),
-                                    PublishDiagnosticsParams {
-                                        uri: dctdp.text_document.uri,
-                                        diagnostics,
-                                        version: Some(dctdp.text_document.version),
-                                    },
-                                )))
-                                .unwrap();
+                            notify(
+                                &c,
+                                PublishDiagnostics::METHOD,
+                                PublishDiagnosticsParams {
+                                    uri: dctdp.text_document.uri,
+                                    diagnostics,
+                                    version: Some(dctdp.text_document.version),
+                                },
+                            );
                             // log(&c, format!("got change document notification for {doc:?}"))
                         }
                         lsp_types::notification::DidCloseTextDocument::METHOD => {
