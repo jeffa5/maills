@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     fs::{read_dir, read_to_string, File},
     io::Write,
     path::PathBuf,
@@ -14,6 +14,7 @@ use crate::{ContactSource, Location, Mailbox};
 pub struct VCards {
     root: PathBuf,
     vcards: BTreeMap<PathBuf, Vec<vcard4::Vcard>>,
+    emails_lower: HashSet<String>,
 }
 
 impl ContactSource for VCards {
@@ -37,11 +38,7 @@ impl ContactSource for VCards {
     }
 
     fn contains(&self, email: &str) -> bool {
-        self.vcards.values().flatten().any(|vc| {
-            vc.email
-                .iter()
-                .any(|e| e.value.to_lowercase() == email.to_lowercase())
-        })
+        self.emails_lower.contains(&email.to_lowercase())
     }
 
     fn locations(&self, mailbox: &Mailbox) -> Vec<Location> {
@@ -89,6 +86,7 @@ impl VCards {
         let mut s = Self {
             root: value,
             vcards: BTreeMap::new(),
+            emails_lower: HashSet::new(),
         };
         s.load_vcards();
         s
@@ -108,7 +106,12 @@ impl VCards {
         for path in vcard_files {
             let content = read_to_string(&path).unwrap_or_default();
             match vcard4::parse_loose(content) {
-                Ok(vcards) => self.vcards.entry(path).or_default().extend(vcards),
+                Ok(vcards) => {
+                    for email in vcards.iter().flat_map(|v| &v.email).map(|w| &w.value) {
+                        self.emails_lower.insert(email.to_lowercase());
+                    }
+                    self.vcards.entry(path).or_default().extend(vcards);
+                }
                 Err(err) => {
                     // skip card that couldn't be loaded
                     eprintln!("Failed to load vcard at {:?}: {}", path, err);
