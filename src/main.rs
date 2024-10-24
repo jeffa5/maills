@@ -291,68 +291,15 @@ impl Server {
                 }
                 Message::Response(r) => log(&c, format!("Unmatched response received: {}", r.id)),
                 Message::Notification(n) => {
-                    match &n.method[..] {
+                    let messages = match &n.method[..] {
                         lsp_types::notification::DidOpenTextDocument::METHOD => {
-                            let dotdp = serde_json::from_value::<
-                                lsp_types::DidOpenTextDocumentParams,
-                            >(n.params)
-                            .unwrap();
-                            self.open_files.add(
-                                dotdp.text_document.uri.to_string(),
-                                dotdp.text_document.text,
-                            );
-                            let diagnostics =
-                                self.refresh_diagnostics(dotdp.text_document.uri.as_ref());
-                            notify(
-                                &c,
-                                PublishDiagnostics::METHOD,
-                                PublishDiagnosticsParams {
-                                    uri: dotdp.text_document.uri,
-                                    diagnostics,
-                                    version: Some(dotdp.text_document.version),
-                                },
-                            )
-                            // log(
-                            //     &c,
-                            //     format!(
-                            //         "got open document notification for {:?}",
-                            //         dotdp.text_document.uri
-                            //     ),
-                            // );
+                            self.handle_did_open_text_document_notification(n)
                         }
                         lsp_types::notification::DidChangeTextDocument::METHOD => {
-                            let dctdp = serde_json::from_value::<
-                                lsp_types::DidChangeTextDocumentParams,
-                            >(n.params)
-                            .unwrap();
-                            let doc = dctdp.text_document.uri.to_string();
-                            self.open_files.apply_changes(&doc, dctdp.content_changes);
-                            let diagnostics =
-                                self.refresh_diagnostics(dctdp.text_document.uri.as_ref());
-                            notify(
-                                &c,
-                                PublishDiagnostics::METHOD,
-                                PublishDiagnosticsParams {
-                                    uri: dctdp.text_document.uri,
-                                    diagnostics,
-                                    version: Some(dctdp.text_document.version),
-                                },
-                            );
-                            // log(&c, format!("got change document notification for {doc:?}"))
+                            self.handle_did_change_text_document_notification(n)
                         }
                         lsp_types::notification::DidCloseTextDocument::METHOD => {
-                            let dctdp = serde_json::from_value::<
-                                lsp_types::DidCloseTextDocumentParams,
-                            >(n.params)
-                            .unwrap();
-                            self.open_files.remove(dctdp.text_document.uri.as_ref());
-                            // log(
-                            //     &c,
-                            //     format!(
-                            //         "got close document notification for {:?}",
-                            //         dctdp.text_document.uri
-                            //     ),
-                            // );
+                            self.handle_did_close_text_document_notification(n)
                         }
                         lsp_types::notification::Exit::METHOD => {
                             if self.shutdown {
@@ -363,7 +310,13 @@ impl Server {
                                 ));
                             }
                         }
-                        _ => log(&c, format!("Unmatched notification received: {}", n.method)),
+                        _ => {
+                            log(&c, format!("Unmatched notification received: {}", n.method));
+                            Vec::new()
+                        }
+                    };
+                    for message in messages {
+                        c.sender.send(message).unwrap()
                     }
                 }
             }
@@ -600,6 +553,76 @@ impl Server {
         messages.push(response);
 
         messages
+    }
+
+    fn handle_did_open_text_document_notification(
+        &mut self,
+        notification: Notification,
+    ) -> Vec<Message> {
+        let dotdp =
+            serde_json::from_value::<lsp_types::DidOpenTextDocumentParams>(notification.params)
+                .unwrap();
+        self.open_files.add(
+            dotdp.text_document.uri.to_string(),
+            dotdp.text_document.text,
+        );
+        let diagnostics = self.refresh_diagnostics(dotdp.text_document.uri.as_ref());
+        let message = Message::Notification(Notification::new(
+            PublishDiagnostics::METHOD.to_owned(),
+            PublishDiagnosticsParams {
+                uri: dotdp.text_document.uri,
+                diagnostics,
+                version: Some(dotdp.text_document.version),
+            },
+        ));
+        vec![message]
+        // log(
+        //     &c,
+        //     format!(
+        //         "got open document notification for {:?}",
+        //         dotdp.text_document.uri
+        //     ),
+        // );
+    }
+
+    fn handle_did_change_text_document_notification(
+        &mut self,
+        notification: Notification,
+    ) -> Vec<Message> {
+        let dctdp =
+            serde_json::from_value::<lsp_types::DidChangeTextDocumentParams>(notification.params)
+                .unwrap();
+        let doc = dctdp.text_document.uri.to_string();
+        self.open_files.apply_changes(&doc, dctdp.content_changes);
+        let diagnostics = self.refresh_diagnostics(dctdp.text_document.uri.as_ref());
+        let message = Message::Notification(Notification::new(
+            PublishDiagnostics::METHOD.to_owned(),
+            PublishDiagnosticsParams {
+                uri: dctdp.text_document.uri,
+                diagnostics,
+                version: Some(dctdp.text_document.version),
+            },
+        ));
+        vec![message]
+        // log(&c, format!("got change document notification for {doc:?}"))
+    }
+
+    fn handle_did_close_text_document_notification(
+        &mut self,
+        notification: Notification,
+    ) -> Vec<Message> {
+        let dctdp =
+            serde_json::from_value::<lsp_types::DidCloseTextDocumentParams>(notification.params)
+                .unwrap();
+        self.open_files.remove(dctdp.text_document.uri.as_ref());
+        Vec::new()
+        // log(
+        //     &c,
+        //     format!(
+        //         "got close document notification for {:?}",
+        //         dctdp.text_document.uri
+        //     ),
+        // );
     }
 
     fn get_mailbox_from_document(
