@@ -4,6 +4,7 @@ use line_index::TextSize;
 use lsp_server::ErrorCode;
 use lsp_server::Message;
 use lsp_server::Notification;
+use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_server::Response;
 use lsp_server::ResponseError;
@@ -51,13 +52,8 @@ struct Args {
     stdio: bool,
 }
 
-fn log(c: &Connection, message: impl Serialize) {
-    c.sender
-        .send(Message::Notification(Notification::new(
-            LogMessage::METHOD.to_string(),
-            message,
-        )))
-        .unwrap();
+fn log(message: impl Serialize) -> Message {
+    Message::Notification(Notification::new(LogMessage::METHOD.to_string(), message))
 }
 
 fn server_capabilities() -> ServerCapabilities {
@@ -258,270 +254,36 @@ impl Server {
                         continue;
                     }
 
-                    match &r.method[..] {
-                        lsp_types::request::HoverRequest::METHOD => {
-                            let tdp =
-                                serde_json::from_value::<lsp_types::TextDocumentPositionParams>(
-                                    r.params,
-                                )
-                                .unwrap();
-
-                            let mailbox = self.get_mailbox_from_document(&tdp);
-                            let response = if let Some(mailbox) = mailbox {
-                                let text = self.sources.render(&mailbox);
-                                let resp = lsp_types::Hover {
-                                    contents: lsp_types::HoverContents::Markup(
-                                        lsp_types::MarkupContent {
-                                            kind: lsp_types::MarkupKind::Markdown,
-                                            value: text,
-                                        },
-                                    ),
-                                    range: None,
-                                };
-                                Message::Response(Response {
-                                    id: r.id,
-                                    result: Some(serde_json::to_value(resp).unwrap()),
-                                    error: None,
-                                })
-                            } else {
-                                Message::Response(Response {
-                                    id: r.id,
-                                    result: None,
-                                    error: None,
-                                })
-                            };
-
-                            c.sender.send(response).unwrap()
-                        }
+                    let messages = match &r.method[..] {
+                        lsp_types::request::HoverRequest::METHOD => self.handle_hover_request(r),
                         lsp_types::request::GotoDefinition::METHOD => {
-                            let tdp =
-                                serde_json::from_value::<lsp_types::TextDocumentPositionParams>(
-                                    r.params,
-                                )
-                                .unwrap();
-
-                            let mut locations = self
-                                .get_mailbox_from_document(&tdp)
-                                .map(|mailbox| self.sources.locations(&mailbox))
-                                .unwrap_or_default();
-                            let response = match locations.len() {
-                                0 => Message::Response(Response {
-                                    id: r.id,
-                                    result: None,
-                                    error: None,
-                                }),
-                                1 => {
-                                    let resp = lsp_types::GotoDefinitionResponse::Scalar(
-                                        locations.remove(0).into(),
-                                    );
-                                    Message::Response(Response {
-                                        id: r.id,
-                                        result: serde_json::to_value(resp).ok(),
-                                        error: None,
-                                    })
-                                }
-                                _ => {
-                                    let resp = lsp_types::GotoDefinitionResponse::Array(
-                                        locations.into_iter().map(|p| p.into()).collect(),
-                                    );
-                                    Message::Response(Response {
-                                        id: r.id,
-                                        result: serde_json::to_value(resp).ok(),
-                                        error: None,
-                                    })
-                                }
-                            };
-
-                            c.sender.send(response).unwrap()
+                            self.handle_goto_definition_request(r)
                         }
-                        lsp_types::request::Completion::METHOD => {
-                            let mut tdp = serde_json::from_value::<
-                                lsp_types::TextDocumentPositionParams,
-                            >(r.params)
-                            .unwrap();
-
-                            tdp.position.character = tdp.position.character.saturating_sub(1);
-                            let response = match self.get_word_from_document(&tdp) {
-                                Some(word) => {
-                                    let limit = 100;
-                                    let lower_word = word.to_lowercase();
-                                    let matches = self.sources.find_matching(&lower_word);
-                                    let completion_items = matches
-                                        .into_iter()
-                                        .map(|mailbox| CompletionItem {
-                                            label: mailbox.to_string(),
-                                            kind: Some(CompletionItemKind::TEXT),
-                                            ..Default::default()
-                                        })
-                                        .take(limit)
-                                        .collect::<Vec<_>>();
-                                    let resp =
-                                        lsp_types::CompletionResponse::List(CompletionList {
-                                            is_incomplete: completion_items.len() == limit,
-                                            items: completion_items,
-                                        });
-                                    Message::Response(Response {
-                                        id: r.id,
-                                        result: serde_json::to_value(resp).ok(),
-                                        error: None,
-                                    })
-                                }
-                                None => Message::Response(Response {
-                                    id: r.id,
-                                    result: None,
-                                    error: None,
-                                }),
-                            };
-
-                            c.sender.send(response).unwrap()
-                        }
+                        lsp_types::request::Completion::METHOD => self.handle_completion_request(r),
                         lsp_types::request::ResolveCompletionItem::METHOD => {
-                            let mut ci =
-                                serde_json::from_value::<lsp_types::CompletionItem>(r.params)
-                                    .unwrap();
-
-                            let mailbox = Mailbox::from_str(&ci.label).unwrap();
-                            let doc = self.sources.render(&mailbox);
-                            ci.documentation = Some(lsp_types::Documentation::MarkupContent(
-                                lsp_types::MarkupContent {
-                                    kind: lsp_types::MarkupKind::Markdown,
-                                    value: doc,
-                                },
-                            ));
-                            let response = Message::Response(Response {
-                                id: r.id,
-                                result: serde_json::to_value(ci).ok(),
-                                error: None,
-                            });
-
-                            c.sender.send(response).unwrap()
+                            self.handle_resolve_completion_item_request(r)
                         }
                         lsp_types::request::CodeActionRequest::METHOD => {
-                            let cap =
-                                serde_json::from_value::<lsp_types::CodeActionParams>(r.params)
-                                    .unwrap();
-
-                            let tdp = TextDocumentPositionParams {
-                                text_document: cap.text_document,
-                                position: cap.range.start,
-                            };
-
-                            let mut action_list = Vec::new();
-                            if let Some(mailbox) = self.get_mailbox_from_document(&tdp) {
-                                let args =
-                                    serde_json::to_value(CreateContactCommandArguments { mailbox })
-                                        .unwrap();
-                                let fixed_diagnostics = self
-                                    .diagnostics
-                                    .iter()
-                                    .filter(|d| in_range(&d.range, &cap.range.start))
-                                    .cloned()
-                                    .collect::<Vec<_>>();
-                                let action = lsp_types::CodeActionOrCommand::CodeAction(
-                                    lsp_types::CodeAction {
-                                        title: "Add to contacts".to_owned(),
-                                        kind: Some(CodeActionKind::QUICKFIX),
-                                        diagnostics: if fixed_diagnostics.is_empty() {
-                                            None
-                                        } else {
-                                            Some(fixed_diagnostics)
-                                        },
-                                        command: Some(lsp_types::Command {
-                                            title: "Add to contacts".to_owned(),
-                                            command: CREATE_CONTACT_COMMAND.to_owned(),
-                                            arguments: Some(vec![args]),
-                                        }),
-                                        ..Default::default()
-                                    },
-                                );
-                                action_list.push(action);
-                            }
-                            let response = Message::Response(Response {
-                                id: r.id,
-                                result: Some(serde_json::to_value(action_list).unwrap()),
-                                error: None,
-                            });
-
-                            c.sender.send(response).unwrap()
+                            self.handle_code_action_request(r)
                         }
                         lsp_types::request::ExecuteCommand::METHOD => {
-                            let mut cap =
-                                serde_json::from_value::<lsp_types::ExecuteCommandParams>(r.params)
-                                    .unwrap();
-
-                            let response = match cap.command.as_str() {
-                                CREATE_CONTACT_COMMAND => {
-                                    let arg = cap.arguments.swap_remove(0);
-                                    match serde_json::from_value::<CreateContactCommandArguments>(
-                                        arg,
-                                    ) {
-                                        Ok(args) => {
-                                            let path = self.sources.create_contact(args.mailbox);
-                                            if let Some(path) = path {
-                                                let params = ShowDocumentParams {
-                                                    uri: Url::from_file_path(path).unwrap(),
-                                                    external: None,
-                                                    take_focus: None,
-                                                    selection: None,
-                                                };
-                                                c.sender
-                                                    .send(Message::Request(lsp_server::Request {
-                                                        id: RequestId::from(0),
-                                                        method:
-                                                            lsp_types::request::ShowDocument::METHOD
-                                                                .to_owned(),
-                                                        params: serde_json::to_value(params)
-                                                            .unwrap(),
-                                                    }))
-                                                    .unwrap();
-                                                Message::Response(Response {
-                                                    id: r.id,
-                                                    result: None,
-                                                    error: None,
-                                                })
-                                            } else {
-                                                Message::Response(Response {
-                                                    id: r.id,
-                                                    result: None,
-                                                    error: None,
-                                                })
-                                            }
-                                        }
-                                        _ => Message::Response(Response {
-                                            id: r.id,
-                                            result: None,
-                                            error: Some(ResponseError {
-                                                code: ErrorCode::InvalidRequest as i32,
-                                                message: String::from("invalid arguments"),
-                                                data: None,
-                                            }),
-                                        }),
-                                    }
-                                }
-                                _ => Message::Response(Response {
-                                    id: r.id,
-                                    result: None,
-                                    error: Some(ResponseError {
-                                        code: ErrorCode::InvalidRequest as i32,
-                                        message: String::from("unknown command"),
-                                        data: None,
-                                    }),
-                                }),
-                            };
-
-                            c.sender.send(response).unwrap()
+                            self.handle_execute_command_request(r)
                         }
                         lsp_types::request::Shutdown::METHOD => {
                             self.shutdown = true;
                             let none: Option<()> = None;
-                            c.sender
-                                .send(Message::Response(Response::new_ok(r.id, none)))
-                                .unwrap()
+                            vec![Message::Response(Response::new_ok(r.id, none))]
                         }
-                        _ => log(&c, format!("Unmatched request received: {}", r.method)),
+                        _ => vec![log(format!("Unmatched request received: {}", r.method))],
+                    };
+                    for message in messages {
+                        c.sender.send(message).unwrap();
                     }
                 }
-                Message::Response(r) => log(&c, format!("Unmatched response received: {}", r.id)),
+                Message::Response(r) => c
+                    .sender
+                    .send(log(format!("Unmatched response received: {}", r.id)))
+                    .unwrap(),
                 Message::Notification(n) => {
                     match &n.method[..] {
                         lsp_types::notification::DidOpenTextDocument::METHOD => {
@@ -597,11 +359,249 @@ impl Server {
                                 ));
                             }
                         }
-                        _ => log(&c, format!("Unmatched notification received: {}", n.method)),
+                        _ => c
+                            .sender
+                            .send(log(format!(
+                                "Unmatched notification received: {}",
+                                n.method
+                            )))
+                            .unwrap(),
                     }
                 }
             }
         }
+    }
+
+    fn handle_hover_request(&mut self, request: Request) -> Vec<Message> {
+        let tdp = serde_json::from_value::<lsp_types::TextDocumentPositionParams>(request.params)
+            .unwrap();
+
+        let mailbox = self.get_mailbox_from_document(&tdp);
+        let response = if let Some(mailbox) = mailbox {
+            let text = self.sources.render(&mailbox);
+            let resp = lsp_types::Hover {
+                contents: lsp_types::HoverContents::Markup(lsp_types::MarkupContent {
+                    kind: lsp_types::MarkupKind::Markdown,
+                    value: text,
+                }),
+                range: None,
+            };
+            Message::Response(Response {
+                id: request.id,
+                result: Some(serde_json::to_value(resp).unwrap()),
+                error: None,
+            })
+        } else {
+            Message::Response(Response {
+                id: request.id,
+                result: None,
+                error: None,
+            })
+        };
+
+        vec![response]
+    }
+
+    fn handle_goto_definition_request(&mut self, request: Request) -> Vec<Message> {
+        let tdp = serde_json::from_value::<lsp_types::TextDocumentPositionParams>(request.params)
+            .unwrap();
+
+        let mut locations = self
+            .get_mailbox_from_document(&tdp)
+            .map(|mailbox| self.sources.locations(&mailbox))
+            .unwrap_or_default();
+        let response = match locations.len() {
+            0 => Message::Response(Response {
+                id: request.id,
+                result: None,
+                error: None,
+            }),
+            1 => {
+                let resp = lsp_types::GotoDefinitionResponse::Scalar(locations.remove(0).into());
+                Message::Response(Response {
+                    id: request.id,
+                    result: serde_json::to_value(resp).ok(),
+                    error: None,
+                })
+            }
+            _ => {
+                let resp = lsp_types::GotoDefinitionResponse::Array(
+                    locations.into_iter().map(|p| p.into()).collect(),
+                );
+                Message::Response(Response {
+                    id: request.id,
+                    result: serde_json::to_value(resp).ok(),
+                    error: None,
+                })
+            }
+        };
+
+        vec![response]
+    }
+
+    fn handle_completion_request(&mut self, request: Request) -> Vec<Message> {
+        let mut tdp =
+            serde_json::from_value::<lsp_types::TextDocumentPositionParams>(request.params)
+                .unwrap();
+
+        tdp.position.character = tdp.position.character.saturating_sub(1);
+        let response = match self.get_word_from_document(&tdp) {
+            Some(word) => {
+                let limit = 100;
+                let lower_word = word.to_lowercase();
+                let matches = self.sources.find_matching(&lower_word);
+                let completion_items = matches
+                    .into_iter()
+                    .map(|mailbox| CompletionItem {
+                        label: mailbox.to_string(),
+                        kind: Some(CompletionItemKind::TEXT),
+                        ..Default::default()
+                    })
+                    .take(limit)
+                    .collect::<Vec<_>>();
+                let resp = lsp_types::CompletionResponse::List(CompletionList {
+                    is_incomplete: completion_items.len() == limit,
+                    items: completion_items,
+                });
+                Message::Response(Response {
+                    id: request.id,
+                    result: serde_json::to_value(resp).ok(),
+                    error: None,
+                })
+            }
+            None => Message::Response(Response {
+                id: request.id,
+                result: None,
+                error: None,
+            }),
+        };
+
+        vec![response]
+    }
+
+    fn handle_resolve_completion_item_request(&mut self, request: Request) -> Vec<Message> {
+        let mut ci = serde_json::from_value::<lsp_types::CompletionItem>(request.params).unwrap();
+
+        let mailbox = Mailbox::from_str(&ci.label).unwrap();
+        let doc = self.sources.render(&mailbox);
+        ci.documentation = Some(lsp_types::Documentation::MarkupContent(
+            lsp_types::MarkupContent {
+                kind: lsp_types::MarkupKind::Markdown,
+                value: doc,
+            },
+        ));
+        let response = Message::Response(Response {
+            id: request.id,
+            result: serde_json::to_value(ci).ok(),
+            error: None,
+        });
+
+        vec![response]
+    }
+
+    fn handle_code_action_request(&mut self, request: Request) -> Vec<Message> {
+        let cap = serde_json::from_value::<lsp_types::CodeActionParams>(request.params).unwrap();
+
+        let tdp = TextDocumentPositionParams {
+            text_document: cap.text_document,
+            position: cap.range.start,
+        };
+
+        let mut action_list = Vec::new();
+        if let Some(mailbox) = self.get_mailbox_from_document(&tdp) {
+            let args = serde_json::to_value(CreateContactCommandArguments { mailbox }).unwrap();
+            let fixed_diagnostics = self
+                .diagnostics
+                .iter()
+                .filter(|d| in_range(&d.range, &cap.range.start))
+                .cloned()
+                .collect::<Vec<_>>();
+            let action = lsp_types::CodeActionOrCommand::CodeAction(lsp_types::CodeAction {
+                title: "Add to contacts".to_owned(),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: if fixed_diagnostics.is_empty() {
+                    None
+                } else {
+                    Some(fixed_diagnostics)
+                },
+                command: Some(lsp_types::Command {
+                    title: "Add to contacts".to_owned(),
+                    command: CREATE_CONTACT_COMMAND.to_owned(),
+                    arguments: Some(vec![args]),
+                }),
+                ..Default::default()
+            });
+            action_list.push(action);
+        }
+        let response = Message::Response(Response {
+            id: request.id,
+            result: Some(serde_json::to_value(action_list).unwrap()),
+            error: None,
+        });
+
+        vec![response]
+    }
+
+    fn handle_execute_command_request(&mut self, request: Request) -> Vec<Message> {
+        let mut cap =
+            serde_json::from_value::<lsp_types::ExecuteCommandParams>(request.params).unwrap();
+
+        let mut messages = Vec::new();
+        let response = match cap.command.as_str() {
+            CREATE_CONTACT_COMMAND => {
+                let arg = cap.arguments.swap_remove(0);
+                match serde_json::from_value::<CreateContactCommandArguments>(arg) {
+                    Ok(args) => {
+                        let path = self.sources.create_contact(args.mailbox);
+                        if let Some(path) = path {
+                            let params = ShowDocumentParams {
+                                uri: Url::from_file_path(path).unwrap(),
+                                external: None,
+                                take_focus: None,
+                                selection: None,
+                            };
+                            messages.push(Message::Request(lsp_server::Request {
+                                id: RequestId::from(0),
+                                method: lsp_types::request::ShowDocument::METHOD.to_owned(),
+                                params: serde_json::to_value(params).unwrap(),
+                            }));
+                            Message::Response(Response {
+                                id: request.id,
+                                result: None,
+                                error: None,
+                            })
+                        } else {
+                            Message::Response(Response {
+                                id: request.id,
+                                result: None,
+                                error: None,
+                            })
+                        }
+                    }
+                    _ => Message::Response(Response {
+                        id: request.id,
+                        result: None,
+                        error: Some(ResponseError {
+                            code: ErrorCode::InvalidRequest as i32,
+                            message: String::from("invalid arguments"),
+                            data: None,
+                        }),
+                    }),
+                }
+            }
+            _ => Message::Response(Response {
+                id: request.id,
+                result: None,
+                error: Some(ResponseError {
+                    code: ErrorCode::InvalidRequest as i32,
+                    message: String::from("unknown command"),
+                    data: None,
+                }),
+            }),
+        };
+        messages.push(response);
+
+        messages
     }
 
     fn get_mailbox_from_document(
@@ -727,7 +727,6 @@ fn main() {
         }
     }
 }
-
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CreateContactCommandArguments {
