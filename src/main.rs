@@ -35,11 +35,11 @@ use lsp_types::Url;
 use maills::ContactList;
 use maills::ContactSource as _;
 use maills::Mailbox;
+use maills::OpenFiles;
 use maills::Sources;
 use maills::VCards;
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -158,7 +158,7 @@ fn connect(stdio: bool) -> (lsp_types::InitializeParams, Connection, IoThreads) 
 
 struct Server {
     sources: Sources,
-    open_files: BTreeMap<String, String>,
+    open_files: OpenFiles,
     diagnostics: Vec<Diagnostic>,
     shutdown: bool,
 }
@@ -232,7 +232,7 @@ impl Server {
 
         Self {
             sources,
-            open_files: BTreeMap::new(),
+            open_files: OpenFiles::default(),
             diagnostics: Vec::new(),
             shutdown: false,
         }
@@ -529,7 +529,7 @@ impl Server {
                                 lsp_types::DidOpenTextDocumentParams,
                             >(n.params)
                             .unwrap();
-                            self.open_files.insert(
+                            self.open_files.add(
                                 dotdp.text_document.uri.to_string(),
                                 dotdp.text_document.text,
                             );
@@ -559,17 +559,7 @@ impl Server {
                             >(n.params)
                             .unwrap();
                             let doc = dctdp.text_document.uri.to_string();
-                            let content = self.open_files.get_mut(&doc).unwrap();
-                            for change in dctdp.content_changes {
-                                if let Some(range) = change.range {
-                                    let start = resolve_position(content, range.start);
-                                    let end = resolve_position(content, range.end);
-                                    content.replace_range(start..end, &change.text);
-                                } else {
-                                    // full content replace
-                                    *content = change.text;
-                                }
-                            }
+                            self.open_files.apply_changes(&doc, dctdp.content_changes);
                             let diagnostics =
                                 self.refresh_diagnostics(dctdp.text_document.uri.as_ref());
                             c.sender
@@ -589,7 +579,7 @@ impl Server {
                                 lsp_types::DidCloseTextDocumentParams,
                             >(n.params)
                             .unwrap();
-                            self.open_files.remove(&dctdp.text_document.uri.to_string());
+                            self.open_files.remove(dctdp.text_document.uri.as_ref());
                             // log(
                             //     &c,
                             //     format!(
@@ -614,40 +604,32 @@ impl Server {
         }
     }
 
-    fn get_file_content(&self, uri: &Url) -> String {
-        if let Some(content) = self.open_files.get(&uri.to_string()) {
-            content.to_owned()
-        } else {
-            std::fs::read_to_string(uri.to_file_path().unwrap()).unwrap()
-        }
-    }
-
     fn get_mailbox_from_document(
-        &self,
+        &mut self,
         tdp: &lsp_types::TextDocumentPositionParams,
     ) -> Option<Mailbox> {
-        let content = self.get_file_content(&tdp.text_document.uri);
+        let content = self.open_files.get(tdp.text_document.uri.as_ref());
         get_mailbox_from_content(
-            &content,
+            content,
             tdp.position.line as usize,
             tdp.position.character as usize,
         )
     }
 
     fn get_word_from_document(
-        &self,
+        &mut self,
         tdp: &lsp_types::TextDocumentPositionParams,
     ) -> Option<String> {
-        let content = self.get_file_content(&tdp.text_document.uri);
+        let content = self.open_files.get(tdp.text_document.uri.as_ref());
         get_word_from_content(
-            &content,
+            content,
             tdp.position.line as usize,
             tdp.position.character as usize,
         )
     }
 
     fn refresh_diagnostics(&mut self, file: &str) -> Vec<Diagnostic> {
-        let content = self.open_files.get(file).unwrap();
+        let content = self.open_files.get(file);
         // from https://www.regular-expressions.info/email.html
         let re = regex::Regex::new(r"(?i)\b([A-Z0-9._%+-~/]+@[A-Z0-9.-]+\.[A-Z]{2,})\b").unwrap();
         let mut email_locations = Vec::new();
@@ -746,23 +728,6 @@ fn main() {
     }
 }
 
-fn resolve_position(content: &str, pos: Position) -> usize {
-    let mut count = 0;
-    let mut lines = 0;
-    let mut character = 0;
-    for c in content.chars() {
-        count += 1;
-        character += 1;
-        if c == '\n' {
-            lines += 1;
-            character = 0;
-        }
-        if lines >= pos.line && character >= pos.character {
-            break;
-        }
-    }
-    count
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CreateContactCommandArguments {
