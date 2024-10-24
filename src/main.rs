@@ -7,7 +7,6 @@ use lsp_server::Notification;
 use lsp_server::Request;
 use lsp_server::RequestId;
 use lsp_server::Response;
-use lsp_server::ResponseError;
 use lsp_server::{Connection, IoThreads};
 use lsp_types::notification::LogMessage;
 use lsp_types::notification::Notification as _;
@@ -68,6 +67,22 @@ fn notify(c: &Connection, method: &str, params: impl Serialize) {
             params,
         )))
         .unwrap();
+}
+
+fn response_empty(id: RequestId) -> Message {
+    Message::Response(Response {
+        id,
+        result: None,
+        error: None,
+    })
+}
+
+fn response_ok(id: RequestId, result: impl Serialize) -> Message {
+    Message::Response(Response::new_ok(id, result))
+}
+
+fn response_err(id: RequestId, code: i32, message: String) -> Message {
+    Message::Response(Response::new_err(id, code, message))
 }
 
 fn server_capabilities() -> ServerCapabilities {
@@ -247,15 +262,11 @@ impl Server {
                     // log(&c, format!("Got request {r:?}"));
                     if self.shutdown {
                         c.sender
-                            .send(Message::Response(Response {
-                                id: r.id,
-                                result: None,
-                                error: Some(ResponseError {
-                                    code: ErrorCode::InvalidRequest as i32,
-                                    message: String::from("received request after shutdown"),
-                                    data: None,
-                                }),
-                            }))
+                            .send(response_err(
+                                r.id,
+                                ErrorCode::InvalidRequest as i32,
+                                String::from("received request after shutdown"),
+                            ))
                             .unwrap();
                         continue;
                     }
@@ -277,8 +288,7 @@ impl Server {
                         }
                         lsp_types::request::Shutdown::METHOD => {
                             self.shutdown = true;
-                            let none: Option<()> = None;
-                            vec![Message::Response(Response::new_ok(r.id, none))]
+                            vec![response_empty(r.id)]
                         }
                         _ => {
                             log(&c, format!("Unmatched request received: {}", r.method));
@@ -337,17 +347,9 @@ impl Server {
                 }),
                 range: None,
             };
-            Message::Response(Response {
-                id: request.id,
-                result: Some(serde_json::to_value(resp).unwrap()),
-                error: None,
-            })
+            response_ok(request.id, resp)
         } else {
-            Message::Response(Response {
-                id: request.id,
-                result: None,
-                error: None,
-            })
+            response_empty(request.id)
         };
 
         vec![response]
@@ -362,28 +364,16 @@ impl Server {
             .map(|mailbox| self.sources.locations(&mailbox))
             .unwrap_or_default();
         let response = match locations.len() {
-            0 => Message::Response(Response {
-                id: request.id,
-                result: None,
-                error: None,
-            }),
+            0 => response_empty(request.id),
             1 => {
                 let resp = lsp_types::GotoDefinitionResponse::Scalar(locations.remove(0).into());
-                Message::Response(Response {
-                    id: request.id,
-                    result: serde_json::to_value(resp).ok(),
-                    error: None,
-                })
+                response_ok(request.id, resp)
             }
             _ => {
                 let resp = lsp_types::GotoDefinitionResponse::Array(
                     locations.into_iter().map(|p| p.into()).collect(),
                 );
-                Message::Response(Response {
-                    id: request.id,
-                    result: serde_json::to_value(resp).ok(),
-                    error: None,
-                })
+                response_ok(request.id, resp)
             }
         };
 
@@ -414,17 +404,9 @@ impl Server {
                     is_incomplete: completion_items.len() == limit,
                     items: completion_items,
                 });
-                Message::Response(Response {
-                    id: request.id,
-                    result: serde_json::to_value(resp).ok(),
-                    error: None,
-                })
+                response_ok(request.id, resp)
             }
-            None => Message::Response(Response {
-                id: request.id,
-                result: None,
-                error: None,
-            }),
+            None => response_empty(request.id),
         };
 
         vec![response]
@@ -441,11 +423,7 @@ impl Server {
                 value: doc,
             },
         ));
-        let response = Message::Response(Response {
-            id: request.id,
-            result: serde_json::to_value(ci).ok(),
-            error: None,
-        });
+        let response = response_ok(request.id, ci);
 
         vec![response]
     }
@@ -484,11 +462,7 @@ impl Server {
             });
             action_list.push(action);
         }
-        let response = Message::Response(Response {
-            id: request.id,
-            result: Some(serde_json::to_value(action_list).unwrap()),
-            error: None,
-        });
+        let response = response_ok(request.id, action_list);
 
         vec![response]
     }
@@ -516,39 +490,21 @@ impl Server {
                                 method: lsp_types::request::ShowDocument::METHOD.to_owned(),
                                 params: serde_json::to_value(params).unwrap(),
                             }));
-                            Message::Response(Response {
-                                id: request.id,
-                                result: None,
-                                error: None,
-                            })
-                        } else {
-                            Message::Response(Response {
-                                id: request.id,
-                                result: None,
-                                error: None,
-                            })
                         }
+                        response_empty(request.id)
                     }
-                    _ => Message::Response(Response {
-                        id: request.id,
-                        result: None,
-                        error: Some(ResponseError {
-                            code: ErrorCode::InvalidRequest as i32,
-                            message: String::from("invalid arguments"),
-                            data: None,
-                        }),
-                    }),
+                    _ => response_err(
+                        request.id,
+                        ErrorCode::InvalidRequest as i32,
+                        String::from("invalid arguments"),
+                    ),
                 }
             }
-            _ => Message::Response(Response {
-                id: request.id,
-                result: None,
-                error: Some(ResponseError {
-                    code: ErrorCode::InvalidRequest as i32,
-                    message: String::from("unknown command"),
-                    data: None,
-                }),
-            }),
+            _ => response_err(
+                request.id,
+                ErrorCode::InvalidRequest as i32,
+                String::from("unknown command"),
+            ),
         };
         messages.push(response);
 
