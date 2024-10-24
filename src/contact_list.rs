@@ -31,7 +31,7 @@ impl ContactSource for ContactList {
         lines.join("\n")
     }
 
-    fn find_matching(&self, word: &str) -> Vec<Mailbox> {
+    fn find_matching(&self, word: &str) -> Vec<(String, Mailbox)> {
         self.contacts
             .iter()
             .map(|e| &e.mailbox)
@@ -46,6 +46,7 @@ impl ContactSource for ContactList {
                 matched_name || matched_email
             })
             .cloned()
+            .map(|m| ("ContactList".to_owned(), m))
             .collect()
     }
 

@@ -393,9 +393,13 @@ impl Server {
                 let matches = self.sources.find_matching(&lower_word);
                 let completion_items = matches
                     .into_iter()
-                    .map(|mailbox| CompletionItem {
+                    .map(|(source, mailbox)| CompletionItem {
                         label: mailbox.to_string(),
                         kind: Some(CompletionItemKind::TEXT),
+                        label_details: Some(lsp_types::CompletionItemLabelDetails {
+                            detail: Some(source.to_owned()),
+                            description: None,
+                        }),
                         ..Default::default()
                     })
                     .take(limit)

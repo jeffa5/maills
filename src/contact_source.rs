@@ -10,7 +10,7 @@ pub trait ContactSource {
     fn render(&self, mailbox: &Mailbox) -> String;
 
     /// Find any matching mailboxes.
-    fn find_matching(&self, word: &str) -> Vec<Mailbox>;
+    fn find_matching(&self, word: &str) -> Vec<(String, Mailbox)>;
 
     /// Whether the given mailbox is in the source.
     fn contains(&self, email: &str) -> bool;
@@ -37,7 +37,7 @@ impl ContactSource for Sources {
             .join("\n\n")
     }
 
-    fn find_matching(&self, word: &str) -> Vec<Mailbox> {
+    fn find_matching(&self, word: &str) -> Vec<(String, Mailbox)> {
         self.sources
             .iter()
             .flat_map(|s| s.find_matching(word))

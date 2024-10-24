@@ -27,13 +27,14 @@ impl ContactSource for VCards {
             .join("\n\n")
     }
 
-    fn find_matching(&self, word: &str) -> Vec<Mailbox> {
+    fn find_matching(&self, word: &str) -> Vec<(String, Mailbox)> {
         self.vcards
             .values()
             .flatten()
             .filter(|vc| match_vcard(vc, word))
             .flat_map(mailboxes_for_vcard)
             .unique()
+            .map(|m| ("VCards".to_owned(), m))
             .collect()
     }
 
