@@ -390,9 +390,8 @@ impl Server {
             Some(word) => {
                 let limit = 100;
                 let lower_word = word.to_lowercase();
-                let matches = self.sources.find_matching(&lower_word);
+                let matches = self.sources.find_matching(lower_word);
                 let completion_items = matches
-                    .into_iter()
                     .map(|(source, mailbox)| CompletionItem {
                         label: mailbox.to_string(),
                         kind: Some(CompletionItemKind::TEXT),

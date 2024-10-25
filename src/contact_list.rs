@@ -31,23 +31,24 @@ impl ContactSource for ContactList {
         lines.join("\n")
     }
 
-    fn find_matching(&self, word: &str) -> Vec<(String, Mailbox)> {
-        self.contacts
-            .iter()
-            .map(|e| &e.mailbox)
-            .filter(|m| {
-                // TODO: make this contains check cheaper, rather than searching every entry
-                // Likely a custom trie
-                let matched_name = m
-                    .name
-                    .as_ref()
-                    .map_or(false, |n| n.to_lowercase().contains(word));
-                let matched_email = m.email.to_lowercase().contains(word);
-                matched_name || matched_email
-            })
-            .cloned()
-            .map(|m| ("ContactList".to_owned(), m))
-            .collect()
+    fn find_matching(&self, word: String) -> Box<dyn Iterator<Item = (String, Mailbox)> + '_> {
+        Box::new(
+            self.contacts
+                .iter()
+                .map(|e| &e.mailbox)
+                .filter(move |m| {
+                    // TODO: make this contains check cheaper, rather than searching every entry
+                    // Likely a custom trie
+                    let matched_name = m
+                        .name
+                        .as_ref()
+                        .map_or(false, |n| n.to_lowercase().contains(&word));
+                    let matched_email = m.email.to_lowercase().contains(&word);
+                    matched_name || matched_email
+                })
+                .cloned()
+                .map(|m| ("ContactList".to_owned(), m)),
+        )
     }
 
     fn contains(&self, email: &str) -> bool {
