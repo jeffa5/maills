@@ -48,15 +48,16 @@ fn resolve_position(content: &str, pos: Position) -> usize {
     let mut lines = 0;
     let mut character = 0;
     for c in content.chars() {
-        count += 1;
-        character += 1;
-        if c == '\n' {
-            lines += 1;
-            character = 0;
-        }
         if lines >= pos.line && character >= pos.character {
             break;
         }
+        if c == '\n' {
+            lines += 1;
+            character = 0;
+        } else {
+            character += 1;
+        }
+        count += 1;
     }
     count
 }
