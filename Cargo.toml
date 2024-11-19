@@ -18,7 +18,7 @@ dirs = "5.0.1"
 memmap = "0.7.0"
 clap = { version = "4.5.4", features = ["derive"] }
 rayon = "1.10.0"
-thiserror = "1.0.58"
+thiserror = "2.0.3"
 vcard4 = "0.5.2"
 itertools = "0.13.0"
 line-index = "0.1.2"
